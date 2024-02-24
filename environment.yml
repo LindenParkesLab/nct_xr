@@ -133,6 +133,7 @@ dependencies:
   - pandas=2.1.4
   - pandocfilters=1.5.0
   - parso=0.8.3
+  - patsy=0.5.3
   - pcre2=10.42
   - pexpect=4.8.0
   - pillow=10.2.0
@@ -180,6 +181,7 @@ dependencies:
   - soupsieve=2.5
   - sqlite=3.41.2
   - stack_data=0.2.0
+  - statsmodels=0.14.0
   - tbb=2021.8.0
   - terminado=0.17.1
   - threadpoolctl=2.2.0
@@ -203,4 +205,8 @@ dependencies:
   - zeromq=4.3.5
   - zlib=1.2.13
   - zstd=1.5.5
+  - pip:
+      - lxml==5.1.0
+      - nibabel==5.2.0
+      - nilearn==0.10.3
 prefix: /home/lindenmp/miniconda3/envs/nct_xr
