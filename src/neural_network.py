@@ -6,110 +6,129 @@ from torch import nn
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-class NNC(nn.Module):
-    def __init__(self, A_norm, T, B, x0, xf, xr, rho, S, xmp):
+class NCT(nn.Module):
+    def __init__(self, adjacency_norm, initial_state, target_state,
+                 time_horizon, control_set,
+                 reference_state, rho, trajectory_constraints):
         super().__init__()
-        n_nodes = A_norm.shape[0]
+        n_nodes = adjacency_norm.shape[0]
 
-        if type(xr) == str and S == 'zero':
-            xr = np.zeros((n_nodes, 1))
+        # state vectors to float if they're bools
+        if type(initial_state[0]) == np.bool_:
+            initial_state = initial_state.astype(float)
+        if type(target_state[0]) == np.bool_:
+            target_state = target_state.astype(float)
 
-        if type(S) == str and S == 'identity':
-            S = np.eye(n_nodes)
+        # check dimensions of states
+        if initial_state.ndim == 1:
+            initial_state = initial_state[:, np.newaxis]
+        if target_state.ndim == 1:
+            target_state = target_state[:, np.newaxis]
+        if reference_state.ndim == 1:
+            reference_state = reference_state[np.newaxis, :, np.newaxis]
+        elif reference_state.ndim == 2:
+            reference_state = reference_state[:, :, np.newaxis]
+        # print(initial_state.shape, target_state.shape, reference_state.shape)
 
-        if type(xmp) == str and xmp == 'midpoint':
-            xmp = x0 + ((xf - x0) * 0.5)  # desire intermediate state
-        m = xmp.shape[0]
-        tmp = np.linspace(0, T, m + 2)[1:-1]
+        n_ref_states = reference_state.shape[0]
+        tmp = np.linspace(0, time_horizon, n_ref_states + 2)[1:-1]
+        reference_state_mean = reference_state.mean(axis=0)
+        # print(reference_state_mean.shape)
 
         # Initialize parameters
         self.n_nodes = torch.tensor(n_nodes).to(device)
-        self.register_parameter(name='an', param=torch.nn.Parameter(torch.zeros((self.n_nodes, 1)).to(device)))
-        # self.register_parameter(name='an', param=torch.nn.Parameter(torch.ones((self.n_nodes, 1)).to(device)))
+        self.register_parameter(name='adjacency_weights', param=torch.nn.Parameter(torch.zeros((self.n_nodes, 1)).to(device)))
 
         # Save remaining variables
-        self.A_norm = torch.tensor(A_norm).to(device)
-        self.T = torch.tensor(T).to(device)
-        self.B = torch.tensor(B).to(device)
-        self.x0 = torch.tensor(x0).to(device)
-        self.xf = torch.tensor(xf).to(device)
-        self.xr = torch.tensor(xr).to(device)
+        self.adjacency_norm = torch.tensor(adjacency_norm).to(device)
+        self.time_horizon = torch.tensor(time_horizon).to(device)
+        self.control_set = torch.tensor(control_set).to(device)
+        self.initial_state = torch.tensor(initial_state).to(device)
+        self.target_state = torch.tensor(target_state).to(device)
+        self.reference_state = torch.tensor(reference_state).to(device)
+        self.n_ref_states = torch.tensor(n_ref_states).to(device)
+        self.reference_state_mean = torch.tensor(reference_state_mean).to(device)
         self.rho = torch.tensor(rho).to(device)
-        self.S = torch.tensor(S).to(device)
-        self.xmp = torch.tensor(xmp).to(device)
+        self.trajectory_constraints = torch.tensor(trajectory_constraints).to(device)
         self.I = torch.eye(n_nodes).to(device)
         self.I2 = torch.eye(2 * n_nodes).double().to(device)
         self.O = torch.zeros((n_nodes, n_nodes)).to(device)
         self.tmp = torch.tensor(tmp).to(device)
-        self.m = torch.tensor(m).to(device)
         self.IO = torch.concat((self.I, self.O), dim=1).to(device)
 
     def forward(self):
-        A_sub = self.A_norm - torch.diag(self.an[:, 0])
+        # apply new weights to adjacency
+        adjacency_sub = self.adjacency_norm - torch.diag(self.adjacency_weights[:, 0])
+        # normalize adjacency
+
         # define joint state-costate matrix
         M = torch.concat((
-            torch.concat((A_sub, torch.matmul(-self.B, self.B.T) / (2 * self.rho)), dim=1),
-            torch.concat((-2 * self.S, -A_sub.T), dim=1)
+            torch.concat((adjacency_sub, torch.matmul(-self.control_set, self.control_set.T) / (2 * self.rho)), dim=1),
+            torch.concat((-2 * self.trajectory_constraints, -adjacency_sub.T), dim=1)
         ), dim=0)
 
         # define constant vector due to cost deviation from reference state
         c = torch.concat((torch.zeros((self.n_nodes, 1)).to(device),
-                          2 * torch.matmul(self.S, self.xr)), dim=0)
+                          2 * torch.matmul(self.trajectory_constraints, self.reference_state_mean)), dim=0)
         c = torch.linalg.solve(M, c)
 
         # compute costate initial condition
         EIp = torch.matrix_exp(M * self.tmp[0])
-        E = torch.matrix_power(EIp, self.m + 1)
+        E = torch.matrix_power(EIp, self.n_ref_states + 1)
         r = torch.arange(self.n_nodes)
         E11 = E[r, :][:, r]
         E12 = E[r, :][:, r + self.n_nodes.detach().cpu().numpy()]
         l0 = torch.linalg.solve(E12, (
-                    self.xf - torch.matmul(E11, self.x0) - torch.matmul(torch.concat((E11 - self.I, E12), dim=1), c)))
-        z0 = torch.concat((self.x0, l0), dim=0)
+                    self.target_state - torch.matmul(E11, self.initial_state) - torch.matmul(torch.concat((E11 - self.I, E12), dim=1), c)))
+        z0 = torch.concat((self.initial_state, l0), dim=0)
 
         # compute intermediate state and error
-        L = 0
+        loss = 0
         EI = self.I2
-        for i in torch.arange(self.m):
+        for i in torch.arange(self.n_ref_states):
             EI = torch.matmul(EI, EIp)
             xI = torch.matmul(EI[r, :], z0) + torch.matmul(EI[r, :] - self.IO, c)
-            L = L + torch.linalg.norm(xI - self.xmp[i, :, :])
-        L = L / self.m
+            loss = loss + torch.linalg.norm(xI - self.reference_state[i, :, :])
+        loss = loss / self.n_ref_states
 
         # Return Loss
-        return L
+        return loss
 
-def train_anp(A_norm, T, B, x0, xf, xmp, xr='zero', rho=1, S='identity', n_steps=1000, lr=0.001, verbose=True):
-    n_nodes = A_norm.shape[0]
+def train_nct(adjacency_norm, initial_state, target_state,
+              time_horizon=1, control_set='identity',
+              reference_state='zero', rho=1, trajectory_constraints='identity',
+              n_steps=1000, lr=0.001):
+    n_nodes = adjacency_norm.shape[0]
 
-    if type(xr) == str and xr == 'zero':
-        xr = np.zeros((n_nodes, 1))
+    if type(reference_state) == str and reference_state == 'zero':
+        reference_state = np.zeros((1, n_nodes, 1))
+    elif type(reference_state) == str and reference_state == 'midpoint':
+        reference_state = initial_state + ((target_state - initial_state) * 0.5)
+    elif type(reference_state) == str and reference_state == 'target_state':
+        reference_state = target_state
+    if reference_state.ndim == 1:
+        reference_state = reference_state[np.newaxis, :, np.newaxis]
 
-    if type(S) == str and S == 'identity':
-        S = np.eye(n_nodes)
+    if type(control_set) == str and control_set == 'identity':
+        control_set = np.eye(n_nodes)
+
+    if type(trajectory_constraints) == str and trajectory_constraints == 'identity':
+        trajectory_constraints = np.eye(n_nodes)
 
     loss = np.zeros(n_steps)
-    anp = np.zeros((n_steps, n_nodes))
-    nnc = NNC(A_norm=A_norm, T=T, B=B, x0=x0, xf=xf, xr=xr, rho=rho, S=S, xmp=xmp)
-    opt = torch.optim.Adam(nnc.parameters(), lr=lr)
-    nnc.train()
-    if verbose:
-        for i in tqdm(np.arange(n_steps)):
-            L = nnc()
-            opt.zero_grad()
-            L.backward()
-            opt.step()
+    optimized_weights = np.zeros((n_steps, n_nodes))
+    nct = NCT(adjacency_norm=adjacency_norm, initial_state=initial_state, target_state=target_state,
+              time_horizon=time_horizon, control_set=control_set,
+              reference_state=reference_state, rho=rho, trajectory_constraints=trajectory_constraints)
+    opt = torch.optim.Adam(nct.parameters(), lr=lr)
+    nct.train()
+    for i in np.arange(n_steps):
+        opt.zero_grad()
+        nct().backward()
+        opt.step()
+        nct.adjacency_weights.data.clamp_(min=-0.9, max=2.0)
 
-            loss[i] = L.detach().cpu().numpy()
-            anp[i, :] = nnc.an.detach().cpu().numpy().flatten()
-    else:
-        for i in np.arange(n_steps):
-            L = nnc()
-            opt.zero_grad()
-            L.backward()
-            opt.step()
+        loss[i] = nct().detach().cpu().numpy()
+        optimized_weights[i, :] = nct.adjacency_weights.detach().cpu().numpy().flatten()
 
-            loss[i] = L.detach().cpu().numpy()
-            anp[i, :] = nnc.an.detach().cpu().numpy().flatten()
-
-    return loss, anp
+    return loss, optimized_weights
