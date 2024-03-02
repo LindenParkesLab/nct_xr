@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../snaplab_tools"
+		},
+		{
+			"path": "../nctpy"
+		}
+	],
+	"settings": {}
+}
