@@ -4,7 +4,6 @@ from tqdm import tqdm
 import torch
 from torch import nn
 
-sys.path.extend(['/home/lindenmp/research_projects/snaplab_tools'])
 sys.path.extend(['/home/lindenmp/research_projects/nctpy/src'])
 
 from nctpy.energies import get_control_inputs, integrate_u
