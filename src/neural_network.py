@@ -1,8 +1,14 @@
-import os
+import os, sys
 import numpy as np
 from tqdm import tqdm
 import torch
 from torch import nn
+
+sys.path.extend(['/home/lindenmp/research_projects/snaplab_tools'])
+sys.path.extend(['/home/lindenmp/research_projects/nctpy/src'])
+
+from nctpy.energies import get_control_inputs, integrate_u
+from nctpy.utils import normalize_state, matrix_normalization
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -132,3 +138,53 @@ def train_nct(adjacency_norm, initial_state, target_state,
         optimized_weights[i, :] = nct.adjacency_weights.detach().cpu().numpy().flatten()
 
     return loss, optimized_weights
+
+
+if __name__ == '__main__':
+    indir = '/home/lindenmp/research_projects/nct_xr/data'
+    outdir = '/home/lindenmp/research_projects/nct_xr/results'
+    A_file = 'hcp_schaefer400-7_Am.npy'
+    fmri_clusters_file = 'hcp_fmri_clusters_k-3.npy'
+    
+    # load A matrix
+    adjacency = np.load(os.path.join(indir, A_file))
+
+    # load rsfMRI clusters
+    fmri_clusters = np.load(os.path.join(outdir, fmri_clusters_file), allow_pickle=True).item()
+    centroids = fmri_clusters['centroids']
+    [n_states, n_nodes] = centroids.shape
+
+    # nct params
+    system = 'continuous'
+    c = 1
+    time_horizon = 1
+    rho = 1
+    control_set = np.eye(n_nodes)  # define control set using a uniform full control set
+    trajectory_constraints = np.eye(n_nodes)  # define state trajectory constraints
+
+    # training params
+    n_steps = 5  # number of gradient steps
+    lr = 0.1  # learning rate for gradient
+    
+    # normalize adjacency matrix
+    adjacency_norm = matrix_normalization(adjacency, system=system, c=c)
+    print('original normalized adjacency matrix')
+    print(adjacency_norm[:5, :5])
+    
+    # brain states
+    initial_state = normalize_state(centroids[0, :])  # initial state
+    target_state = normalize_state(centroids[2, :])  # target state
+    reference_state = 'midpoint'  # reference state
+
+    # run training
+    loss, opt_weights = train_nct(adjacency_norm=adjacency_norm, initial_state=initial_state, target_state=target_state,
+                                        time_horizon=time_horizon, control_set=control_set,
+                                        reference_state=reference_state, rho=rho, trajectory_constraints=trajectory_constraints,
+                                        n_steps=n_steps, lr=lr)
+    print('optimized weights after n_steps')
+    print(opt_weights[-1,:5])
+
+    # get optimized adjacency matrix
+    adjacency_norm_opt = adjacency_norm - np.diag(opt_weights[-1, :])  # A_norm with optimized self-inhibition weights
+    print('optimized normalized adjacency matrix')
+    print(adjacency_norm_opt[:5, :5])
