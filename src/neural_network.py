@@ -65,6 +65,12 @@ class NCT(nn.Module):
         # apply new weights to adjacency
         adjacency_sub = self.adjacency_norm - torch.diag(self.adjacency_weights[:, 0])
         # normalize adjacency
+        
+        # Soft constraint for negative eigenvalues for stability
+        # Increase prefactor until max eigenvalue converges to negative number
+        ev = torch.linalg.eigvalsh(adjacency_sub)
+        loss_ev = torch.mean(-torch.div(0.001,ev))
+        print(torch.max(ev))
 
         # define joint state-costate matrix
         M = torch.concat((
@@ -97,7 +103,7 @@ class NCT(nn.Module):
         loss = loss / self.n_ref_states
 
         # Return Loss
-        return loss
+        return loss + loss_ev
 
 def train_nct(adjacency_norm, initial_state, target_state,
               time_horizon=1, control_set='identity',
@@ -162,7 +168,7 @@ if __name__ == '__main__':
     trajectory_constraints = np.eye(n_nodes)  # define state trajectory constraints
 
     # training params
-    n_steps = 5  # number of gradient steps
+    n_steps = 50  # number of gradient steps
     lr = 0.1  # learning rate for gradient
     
     # normalize adjacency matrix
