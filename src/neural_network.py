@@ -1,4 +1,4 @@
-import os, sys
+import os, sys, time
 import numpy as np
 from tqdm import tqdm
 import torch
@@ -16,7 +16,7 @@ class NCT(nn.Module):
                  initial_state, target_state,
                  time_horizon, control_set,
                  reference_state, rho, trajectory_constraints,
-                 alpha=0.001):
+                 eig_weight=0.001, reg_weight=0.001):
         super().__init__()
         n_nodes = adjacency_norm.shape[0]
 
@@ -44,7 +44,7 @@ class NCT(nn.Module):
 
         # Initialize parameters
         self.n_nodes = torch.tensor(n_nodes).to(device)
-        self.register_parameter(name='adjacency_weights', param=torch.nn.Parameter(torch.zeros((self.n_nodes, 1)).to(device)))
+        self.register_parameter(name='adjacency_weights', param=torch.nn.Parameter(torch.ones((self.n_nodes, 1)).to(device)))
 
         # Save remaining variables
         self.adjacency_norm = torch.tensor(adjacency_norm).to(device)
@@ -62,18 +62,33 @@ class NCT(nn.Module):
         self.O = torch.zeros((n_nodes, n_nodes)).to(device)
         self.tmp = torch.tensor(tmp).to(device)
         self.IO = torch.concat((self.I, self.O), dim=1).to(device)
-        self.alpha = alpha
+        self.eig_weight = eig_weight
+        self.reg_weight = reg_weight
+
+
+    def eigen_value_loss(self, adjacency_sub):
+        # Soft constraint for negative eigenvalues for stability
+        # Increase prefactor until max eigenvalue converges to negative number
+        eig_val = torch.linalg.eigvalsh(adjacency_sub)
+        eig_val_loss = torch.mean(-torch.div(self.eig_weight, eig_val))
+        
+        return eig_val, eig_val_loss
+
+
+    def regularization(self, adjacency_sub, type='l2', reg_weight=0.001):
+        w = torch.diag(adjacency_sub)
+        if type == 'l1':
+            return reg_weight * torch.abs(w).sum()
+        elif type == 'l2':
+            return reg_weight * torch.square(w).sum()
+
 
     def forward(self):
         # apply new weights to adjacency
         adjacency_sub = self.adjacency_norm - torch.diag(self.adjacency_weights[:, 0])
-        # normalize adjacency
-        
-        # Soft constraint for negative eigenvalues for stability
-        # Increase prefactor until max eigenvalue converges to negative number
-        eig_val = torch.linalg.eigvalsh(adjacency_sub)
-        loss_ev = torch.mean(-torch.div(self.alpha, eig_val))
-        print(torch.max(eig_val))
+
+        _, eig_val_loss = self.eigen_value_loss(adjacency_sub=adjacency_sub)
+        reg = self.regularization(adjacency_sub=adjacency_sub, type='l2', reg_weight=self.reg_weight)
 
         # define joint state-costate matrix
         M = torch.concat((
@@ -97,21 +112,23 @@ class NCT(nn.Module):
         z0 = torch.concat((self.initial_state, l0), dim=0)
 
         # compute intermediate state and error
-        loss = 0
+        error = 0
         EI = self.I2
         for i in torch.arange(self.n_ref_states):
             EI = torch.matmul(EI, EIp)
             xI = torch.matmul(EI[r, :], z0) + torch.matmul(EI[r, :] - self.IO, c)
-            loss = loss + torch.linalg.norm(xI - self.reference_state[i, :, :])
-        loss = loss / self.n_ref_states
+            error += torch.linalg.norm(xI - self.reference_state[i, :, :])
+        error = error / self.n_ref_states
 
         # Return Loss
-        return loss + loss_ev, eig_val
+        loss = error + eig_val_loss + reg
+        return loss
+   
 
 def train_nct(adjacency_norm, initial_state, target_state,
               time_horizon=1, control_set='identity',
               reference_state='zero', rho=1, trajectory_constraints='identity',
-              n_steps=1000, lr=0.001, alpha=0.001):
+              n_steps=1000, lr=0.001, eig_weight=0.001, reg_weight=0.001):
     n_nodes = adjacency_norm.shape[0]
 
     if type(reference_state) == str and reference_state == 'zero':
@@ -135,22 +152,24 @@ def train_nct(adjacency_norm, initial_state, target_state,
     nct = NCT(adjacency_norm=adjacency_norm, initial_state=initial_state, target_state=target_state,
               time_horizon=time_horizon, control_set=control_set,
               reference_state=reference_state, rho=rho, trajectory_constraints=trajectory_constraints,
-              alpha=alpha)
+              eig_weight=eig_weight, reg_weight=reg_weight)
     opt = torch.optim.Adam(nct.parameters(), lr=lr)
     nct.train()
-    for i in np.arange(n_steps):
+    for i in tqdm(np.arange(n_steps)):
         opt.zero_grad()
         nct().backward()
         opt.step()
-        # nct.adjacency_weights.data.clamp_(min=-0.9, max=2.0)
-
-        loss[i], eig_val[i] = nct().detach().cpu().numpy()
+        loss[i] = nct().detach().cpu().numpy()
+        
         optimized_weights[i, :] = nct.adjacency_weights.detach().cpu().numpy().flatten()
+        adjacency_sub = adjacency_norm - np.diag(optimized_weights[i, :])
+        eig_val[i] = np.max(np.linalg.eigvalsh(adjacency_sub))
 
     return loss, eig_val, optimized_weights
 
 
 if __name__ == '__main__':
+    start = time.time()
     indir = '/home/lindenmp/research_projects/nct_xr/data'
     outdir = '/home/lindenmp/research_projects/nct_xr/results'
     A_file = 'hcp_schaefer400-7_Am.npy'
@@ -172,30 +191,34 @@ if __name__ == '__main__':
     control_set = np.eye(n_nodes)  # define control set using a uniform full control set
     trajectory_constraints = np.eye(n_nodes)  # define state trajectory constraints
 
-    # training params
-    n_steps = 50  # number of gradient steps
-    lr = 0.1  # learning rate for gradient
-    alpha = 0.001
-    
     # normalize adjacency matrix
     adjacency_norm = matrix_normalization(adjacency, system=system, c=c)
-    print('original normalized adjacency matrix')
-    print(adjacency_norm[:5, :5])
     
     # brain states
     initial_state = normalize_state(centroids[0, :])  # initial state
     target_state = normalize_state(centroids[2, :])  # target state
     reference_state = 'midpoint'  # reference state
 
-    # run training
-    loss, eig_val, opt_weights = train_nct(adjacency_norm=adjacency_norm, initial_state=initial_state, target_state=target_state,
-                                           time_horizon=time_horizon, control_set=control_set,
-                                           reference_state=reference_state, rho=rho, trajectory_constraints=trajectory_constraints,
-                                           n_steps=n_steps, lr=lr, alpha=alpha)
-    print('optimized weights after n_steps')
-    print(opt_weights[-1,:5])
+    # training params
+    n_steps = 5000  # number of gradient steps
+    lr = 0.001  # learning rate for gradient
+    for eig_weight in [0.001, 0.01, 0.1]:
+        for reg_weight in [0.001, 0.01, 0.1]:
+            print('eig_weight = {0}; reg_weight = {1}'.format(eig_weight, reg_weight))
+            # run training
+            loss, eig_val, opt_weights = train_nct(adjacency_norm=adjacency_norm, initial_state=initial_state, target_state=target_state,
+                                                   time_horizon=time_horizon, control_set=control_set,
+                                                   reference_state=reference_state, rho=rho, trajectory_constraints=trajectory_constraints,
+                                                   n_steps=n_steps, lr=lr, eig_weight=eig_weight, reg_weight=reg_weight)
+            
+                # save outputs
+            log_args = {
+                'loss': loss,
+                'eig_val': eig_val,
+                'opt_weights': opt_weights
+            }
+            file_str = 'neural_network_nsteps-{0}_lr-{1}_eig-weight-{2}_reg-weight-{3}'.format(n_steps, lr, eig_weight, reg_weight)
+            np.save(os.path.join(outdir, file_str), log_args)
 
-    # get optimized adjacency matrix
-    adjacency_norm_opt = adjacency_norm - np.diag(opt_weights[-1, :])  # A_norm with optimized self-inhibition weights
-    print('optimized normalized adjacency matrix')
-    print(adjacency_norm_opt[:5, :5])
+            end = time.time()
+    print('...done in {:.2f} seconds.'.format(end - start))
