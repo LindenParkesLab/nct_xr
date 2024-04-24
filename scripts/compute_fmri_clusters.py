@@ -62,40 +62,44 @@ def run(config):
 
     ####################################################################################################################
     # load task time series
-    print('Loading task-based fMRI data...')
-    tfmri = np.load(os.path.join(indir, tfmri_file))
-    [n_trs, n_nodes, n_scans, n_subs] = tfmri.shape
-    print('n_trs, {0}; n_nodes, {1}; n_scans {2}; n_subs, {3}'.format(n_trs, n_nodes, n_scans, n_subs))
+    if tfmri_file is not None:
+        print('Loading task-based fMRI data...')
+        tfmri = np.load(os.path.join(indir, tfmri_file))
+        [n_trs, n_nodes, n_scans, n_subs] = tfmri.shape
+        print('n_trs, {0}; n_nodes, {1}; n_scans {2}; n_subs, {3}'.format(n_trs, n_nodes, n_scans, n_subs))
 
-    # take first scan
-    print('Retaining first scan...')
-    tfmri = tfmri[:, :, 0, :]
-    tfmri = tfmri[:, :, np.newaxis, :]
-    [n_trs, n_nodes, n_scans, n_subs] = tfmri.shape
-    print('n_trs, {0}; n_nodes, {1}; n_scans {2}; n_subs, {3}'.format(n_trs, n_nodes, n_scans, n_subs))
+        # take first scan
+        print('Retaining first scan...')
+        tfmri = tfmri[:, :, 0, :]
+        tfmri = tfmri[:, :, np.newaxis, :]
+        [n_trs, n_nodes, n_scans, n_subs] = tfmri.shape
+        print('n_trs, {0}; n_nodes, {1}; n_scans {2}; n_subs, {3}'.format(n_trs, n_nodes, n_scans, n_subs))
 
-    # reshape data to collapse scans
-    print('concatenating time series...')
-    tfmri_concat = np.zeros((n_trs * n_subs * n_scans, n_nodes))
-    print(tfmri_concat.shape)
-    tfmri_concat[:] = np.nan
-    start_idx = 0
-    for i in tqdm(np.arange(n_subs)):
-        for j in np.arange(n_scans):
-            if i == 0 and j == 0:
-                pass
-            else:
-                start_idx += n_trs
-            end_idx = start_idx + n_trs
-            tfmri_concat[start_idx:end_idx, :] = tfmri[:, :, j, i]
-    print(np.any(np.isnan(tfmri_concat)))
-    del tfmri
+        # reshape data to collapse scans
+        print('concatenating time series...')
+        tfmri_concat = np.zeros((n_trs * n_subs * n_scans, n_nodes))
+        print(tfmri_concat.shape)
+        tfmri_concat[:] = np.nan
+        start_idx = 0
+        for i in tqdm(np.arange(n_subs)):
+            for j in np.arange(n_scans):
+                if i == 0 and j == 0:
+                    pass
+                else:
+                    start_idx += n_trs
+                end_idx = start_idx + n_trs
+                tfmri_concat[start_idx:end_idx, :] = tfmri[:, :, j, i]
+        print(np.any(np.isnan(tfmri_concat)))
+        del tfmri
     ####################################################################################################################
 
     ####################################################################################################################
     print('Computing k-means solution...')
     start = time.time()
-    ts_concat = np.concatenate((rsfmri_concat, tfmri_concat), axis=0)
+    if tfmri_file is not None:
+        ts_concat = np.concatenate((rsfmri_concat, tfmri_concat), axis=0)
+    else:
+        ts_concat = rsfmri_concat
     print(ts_concat.shape)
 
     # extract clusters of activity
@@ -156,18 +160,15 @@ def get_args():
     '''
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--indir', type=str, default='/media/lindenmp/storage_ssd/research_projects/nct_xr/data')
+    parser.add_argument('--indir', type=str, default='/home/lindenmp/research_projects/nct_xr/data')
     parser.add_argument('--outdir', type=str, default='/home/lindenmp/research_projects/nct_xr/results')
     parser.add_argument('--rsfmri_file', type=str, default='hcp_schaefer400-7_rsts.npy')
-    parser.add_argument('--tfmri_file', type=str, default='hcp_schaefer400-7_taskts.npy')
+    # parser.add_argument('--tfmri_file', type=str, default='hcp_schaefer400-7_taskts.npy')
+    parser.add_argument('--tfmri_file', type=str, default=None)
     parser.add_argument('--file_prefix', type=str, default='hcp_')
-    # parser.add_argument('--indir', type=str, default='/media/lindenmp/storage_ssd/research_projects/nct_xr/data/probabilistic_sift_radius2_count')
-    # parser.add_argument('--outdir', type=str, default='/home/lindenmp/research_projects/nct_xr/results')
-    # parser.add_argument('--rsfmri_file', type=str, default='pnc_schaefer400-7_rsts.npy')
-    # parser.add_argument('--file_prefix', type=str, default='pnc_')
 
     # settings
-    parser.add_argument('--n_clusters', type=int, default=3)
+    parser.add_argument('--n_clusters', type=int, default=5)
     parser.add_argument('--gen_figs', type=bool, default=True)
 
     args = parser.parse_args()
