@@ -146,15 +146,17 @@ def train_nct(adjacency_norm, initial_state, target_state,
     if type(trajectory_constraints) == str and trajectory_constraints == 'identity':
         trajectory_constraints = np.eye(n_nodes)
 
-    loss = np.zeros(n_steps)
-    eig_val = np.zeros(n_steps)
-    optimized_weights = np.zeros((n_steps, n_nodes))
     nct = NCT(adjacency_norm=adjacency_norm, initial_state=initial_state, target_state=target_state,
               time_horizon=time_horizon, control_set=control_set,
               reference_state=reference_state, rho=rho, trajectory_constraints=trajectory_constraints,
               eig_weight=eig_weight, reg_weight=reg_weight)
     opt = torch.optim.Adam(nct.parameters(), lr=lr)
     nct.train()
+
+    loss = np.zeros(n_steps)
+    eig_val = np.zeros(n_steps)
+    optimized_weights = np.zeros((n_steps, n_nodes))
+    stopping_window = int(n_steps * .10)
     for i in tqdm(np.arange(n_steps)):
         opt.zero_grad()
         nct().backward()
@@ -164,6 +166,19 @@ def train_nct(adjacency_norm, initial_state, target_state,
         optimized_weights[i, :] = nct.adjacency_weights.detach().cpu().numpy().flatten()
         adjacency_sub = adjacency_norm - np.diag(optimized_weights[i, :])
         eig_val[i] = np.max(np.linalg.eigvalsh(adjacency_sub))
+        
+        if i > stopping_window:
+            loss_std = np.round(np.std(loss[i-stopping_window:i]), 2)
+            if loss_std == 0.0:
+                print('Hit early stopping criteria (std[loss] = {:.2f}). Exiting...'.format(loss_std))
+                loss[i+1:] = np.nan
+                eig_val[i+1:] = np.nan
+                optimized_weights[i+1:, :] = np.nan
+                break
+            else:
+                pass
+        else:
+            pass
 
     return loss, eig_val, optimized_weights
 
@@ -202,23 +217,23 @@ if __name__ == '__main__':
     # training params
     n_steps = 5000  # number of gradient steps
     lr = 0.001  # learning rate for gradient
-    for eig_weight in [0.001, 0.01, 0.1]:
-        for reg_weight in [0.001, 0.01, 0.1]:
-            print('eig_weight = {0}; reg_weight = {1}'.format(eig_weight, reg_weight))
-            # run training
-            loss, eig_val, opt_weights = train_nct(adjacency_norm=adjacency_norm, initial_state=initial_state, target_state=target_state,
-                                                   time_horizon=time_horizon, control_set=control_set,
-                                                   reference_state=reference_state, rho=rho, trajectory_constraints=trajectory_constraints,
-                                                   n_steps=n_steps, lr=lr, eig_weight=eig_weight, reg_weight=reg_weight)
-            
-                # save outputs
-            log_args = {
-                'loss': loss,
-                'eig_val': eig_val,
-                'opt_weights': opt_weights
-            }
-            file_str = 'neural_network_nsteps-{0}_lr-{1}_eig-weight-{2}_reg-weight-{3}'.format(n_steps, lr, eig_weight, reg_weight)
-            np.save(os.path.join(outdir, file_str), log_args)
+    eig_weight = 0.001  # regularization strength for eigen value penalty
+    reg_weight = 0.001  # regularization strength for weight penalty (e.g., l2)
+    print('n_steps = {0}; lr = {1}; eig_weight = {2}; reg_weight = {3}'.format(n_steps, lr, eig_weight, reg_weight))
+    # run training
+    loss, eig_val, opt_weights = train_nct(adjacency_norm=adjacency_norm, initial_state=initial_state, target_state=target_state,
+                                            time_horizon=time_horizon, control_set=control_set,
+                                            reference_state=reference_state, rho=rho, trajectory_constraints=trajectory_constraints,
+                                            n_steps=n_steps, lr=lr, eig_weight=eig_weight, reg_weight=reg_weight)
+    
+        # save outputs
+    log_args = {
+        'loss': loss,
+        'eig_val': eig_val,
+        'opt_weights': opt_weights
+    }
+    file_str = 'neural_network_nsteps-{0}_lr-{1}_eig-weight-{2}_reg-weight-{3}'.format(n_steps, lr, eig_weight, reg_weight)
+    np.save(os.path.join(outdir, file_str), log_args)
 
-            end = time.time()
+    end = time.time()
     print('...done in {:.2f} seconds.'.format(end - start))
