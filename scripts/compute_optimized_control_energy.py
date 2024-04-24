@@ -76,7 +76,7 @@ def run(config):
         for initial_idx in np.arange(n_states):
             initial_state = normalize_state(centroids[initial_idx, :])  # initial state
             for target_idx in np.arange(n_states):
-                print('initial_state = {0}, target_state = {1}'.format((initial_state, target_state)))
+                print('initial_state = {0}, target_state = {1}'.format(initial_idx, target_idx))
                 if initial_idx != target_idx:
                     target_state = normalize_state(centroids[target_idx, :])  # target state
 
