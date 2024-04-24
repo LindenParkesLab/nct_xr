@@ -207,7 +207,7 @@ def get_args():
     '''
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--indir', type=str, default='/media/lindenmp/storage_ssd/research_projects/nct_xr/data')
+    parser.add_argument('--indir', type=str, default='/home/lindenmp/research_projects/nct_xr/data')
     parser.add_argument('--outdir', type=str, default='/home/lindenmp/research_projects/nct_xr/results')
     parser.add_argument('--A_file', type=str, default='hcp_schaefer400-7_Am.npy')
     parser.add_argument('--fmri_clusters_file', type=str, default='hcp_fmri_clusters_k-10.npy')
