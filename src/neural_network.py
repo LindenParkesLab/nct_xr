@@ -69,10 +69,10 @@ class NCT(nn.Module):
     def eigen_value_loss(self, adjacency_sub):
         # Soft constraint for negative eigenvalues for stability
         # Increase prefactor until max eigenvalue converges to negative number
-        eig_val = torch.linalg.eigvalsh(adjacency_sub)
-        eig_val_loss = torch.mean(-torch.div(self.eig_weight, eig_val))
+        eigen_values = torch.linalg.eigvalsh(adjacency_sub)
+        eig_val_loss = torch.mean(-torch.div(self.eig_weight, eigen_values))
         
-        return eig_val, eig_val_loss
+        return eigen_values, eig_val_loss
 
 
     def regularization(self, adjacency_sub, type='l2', reg_weight=0.001):
@@ -154,7 +154,7 @@ def train_nct(adjacency_norm, initial_state, target_state,
     nct.train()
 
     loss = np.zeros(n_steps)
-    eig_val = np.zeros(n_steps)
+    eigen_values = np.zeros(n_steps)
     optimized_weights = np.zeros((n_steps, n_nodes))
     stopping_window = int(n_steps * .10)
     for i in tqdm(np.arange(n_steps)):
@@ -165,14 +165,14 @@ def train_nct(adjacency_norm, initial_state, target_state,
         
         optimized_weights[i, :] = nct.adjacency_weights.detach().cpu().numpy().flatten()
         adjacency_sub = adjacency_norm - np.diag(optimized_weights[i, :])
-        eig_val[i] = np.max(np.linalg.eigvalsh(adjacency_sub))
+        eigen_values[i] = np.max(np.linalg.eigvalsh(adjacency_sub))
         
         if i > stopping_window:
             loss_std = np.round(np.std(loss[i-stopping_window:i]), 2)
             if loss_std == 0.0:
-                print('Hit early stopping criteria (std[loss] = {:.2f}). Exiting...'.format(loss_std))
+                print('Hit early stopping criteria (std[loss] = {:.2f}) at step {:}. Exiting...'.format(loss_std, i))
                 loss[i+1:] = np.nan
-                eig_val[i+1:] = np.nan
+                eigen_values[i+1:] = np.nan
                 optimized_weights[i+1:, :] = np.nan
                 break
             else:
@@ -180,7 +180,7 @@ def train_nct(adjacency_norm, initial_state, target_state,
         else:
             pass
 
-    return loss, eig_val, optimized_weights
+    return loss, eigen_values, optimized_weights
 
 
 if __name__ == '__main__':
@@ -212,16 +212,20 @@ if __name__ == '__main__':
     # brain states
     initial_state = normalize_state(centroids[0, :])  # initial state
     target_state = normalize_state(centroids[2, :])  # target state
-    reference_state = 'midpoint'  # reference state
+    reference_state = 'zero'  # reference state
+    # reference_state = 'midpoint'  # reference state
+    reference_state_str = reference_state
+    # reference_state = target_state
+    # reference_state_str = 'targetstate'
 
     # training params
-    n_steps = 5000  # number of gradient steps
-    lr = 0.001  # learning rate for gradient
+    n_steps = 1000  # number of gradient steps
+    lr = 0.01  # learning rate for gradient
     eig_weight = 0.001  # regularization strength for eigen value penalty
     reg_weight = 0.001  # regularization strength for weight penalty (e.g., l2)
     print('n_steps = {0}; lr = {1}; eig_weight = {2}; reg_weight = {3}'.format(n_steps, lr, eig_weight, reg_weight))
     # run training
-    loss, eig_val, opt_weights = train_nct(adjacency_norm=adjacency_norm, initial_state=initial_state, target_state=target_state,
+    loss, eigen_values, opt_weights = train_nct(adjacency_norm=adjacency_norm, initial_state=initial_state, target_state=target_state,
                                             time_horizon=time_horizon, control_set=control_set,
                                             reference_state=reference_state, rho=rho, trajectory_constraints=trajectory_constraints,
                                             n_steps=n_steps, lr=lr, eig_weight=eig_weight, reg_weight=reg_weight)
@@ -229,10 +233,10 @@ if __name__ == '__main__':
         # save outputs
     log_args = {
         'loss': loss,
-        'eig_val': eig_val,
+        'eigen_values': eigen_values,
         'opt_weights': opt_weights
     }
-    file_str = 'neural_network_nsteps-{0}_lr-{1}_eig-weight-{2}_reg-weight-{3}'.format(n_steps, lr, eig_weight, reg_weight)
+    file_str = 'neural_network_nsteps-{0}_lr-{1}_eig-weight-{2}_reg-weight-{3}_{4}'.format(n_steps, lr, eig_weight, reg_weight, reference_state_str)
     np.save(os.path.join(outdir, file_str), log_args)
 
     end = time.time()
