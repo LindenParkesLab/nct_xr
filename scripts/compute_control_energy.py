@@ -32,9 +32,6 @@ def run(config):
     A_file = config['A_file']
     fmri_clusters_file = config['fmri_clusters_file']
     file_prefix = config['file_prefix']
-    T = config['T']
-    c = config['c']
-    rho = config['rho']
 
     # load A matrix
     adjacency = np.load(os.path.join(indir, A_file))
@@ -43,16 +40,25 @@ def run(config):
     fmri_clusters = np.load(os.path.join(outdir, fmri_clusters_file), allow_pickle=True).item()
     centroids = fmri_clusters['centroids']
     [n_states, n_nodes] = centroids.shape
+    print('\nbrain state params: k = {0}'.format(n_states))
 
-    print('\nk={0}; T={1}; c={2}; rho={3}'.format(n_states, T, c, rho))
+    # nct params
+    system = 'continuous'
+    optimal_control = config['optimal_control']
+    c = config['c']
+    time_horizon = config['time_horizon']
+    rho = config['rho']    
+    control_set = np.eye(n_nodes)  # define control set using a uniform full control set
+    if optimal_control:
+        trajectory_constraints = np.eye(n_nodes)  # define state trajectory constraints
+    else:
+        trajectory_constraints = np.zeros((n_nodes, n_nodes))  # define state trajectory constraints
+    print('nct params: optimal control = {0}; c = {1}; time_horizon = {2}; rho = {3}'.format(optimal_control, c, time_horizon, rho))
 
+    # compute control energy
     start = time.time()
-    # --- compute control energy. Reference state = target state ---
-    print('Compute control energy. Reference state = target state...')
-    # define control set using a uniform full control set
-    control_set = np.eye(n_nodes)
-    # define state trajectory constraints
-    trajectory_constraints = np.eye(n_nodes)
+    log_args = dict()
+
     # assemble control tasks
     control_tasks = []
     for initial_idx in np.arange(n_states):
@@ -63,76 +69,33 @@ def run(config):
             control_task = dict()  # initialize dict
             control_task["x0"] = initial_state  # store initial state
             control_task["xf"] = target_state  # store target state
-            control_task["xr"] = target_state  # reference state
             control_task["B"] = control_set  # store control set
             control_task["S"] = trajectory_constraints  # store state trajectory constraints
             control_task["rho"] = rho  # store rho
             control_tasks.append(control_task)
 
-    # compute control energy across all control tasks
-    compute_control_energy = ComputeControlEnergy(A=adjacency,
-                                                  control_tasks=control_tasks,
-                                                  system="continuous", c=c, T=T)
-    compute_control_energy.run()
+    for reference_state in ['zero', 'midpoint', 'xf']:
+        print('\ncomputing control energy. Reference state = {0}...'.format(reference_state))
 
-    # reshape energy into matrix
-    control_energy_xf = np.reshape(compute_control_energy.E, (n_states, n_states))
+        for i in np.arange(len(control_tasks)):
+            control_tasks[i]["xr"] = reference_state
 
-    # --- compute control energy. Reference state = midpoint ---
-    print('Compute control energy. Reference state = midpoint...')
-    for i in np.arange(len(control_tasks)):
-        control_tasks[i]["xr"] = control_tasks[i]["x0"] + ((control_tasks[i]["xf"] - control_tasks[i]["x0"]) * 0.5)  # reference state
+        # compute control energy across all control tasks
+        compute_control_energy = ComputeControlEnergy(A=adjacency,
+                                                      control_tasks=control_tasks,
+                                                      system=system, c=c, T=time_horizon)
+        compute_control_energy.run()
 
-    # compute control energy across all control tasks
-    compute_control_energy = ComputeControlEnergy(A=adjacency,
-                                                  control_tasks=control_tasks,
-                                                  system="continuous", c=c, T=T)
-    compute_control_energy.run()
+        # reshape energy into matrix
+        control_energy = np.reshape(compute_control_energy.E, (n_states, n_states))
 
-    # reshape energy into matrix
-    control_energy_midpoint = np.reshape(compute_control_energy.E, (n_states, n_states))
-
-    # --- compute control energy. Reference state = zeros ---
-    print('Compute control energy. Reference state = zeros...')
-    for i in np.arange(len(control_tasks)):
-        control_tasks[i]["xr"] = 'zero'  # reference state
-
-    # compute control energy across all control tasks
-    compute_control_energy = ComputeControlEnergy(A=adjacency,
-                                                  control_tasks=control_tasks,
-                                                  system="continuous", c=c, T=T)
-    compute_control_energy.run()
-
-    # reshape energy into matrix
-    control_energy_zero = np.reshape(compute_control_energy.E, (n_states, n_states))
-
-    # --- compute control energy. Reference state = fMRI clusters ---
-    # print('Compute control energy. Reference state = fMRI clusters...')
-    # control_energy_ref = np.zeros((n_states, n_states, n_states))
-    # for ref_state in np.arange(n_states):
-    #     reference_state = centroids[ref_state, :]
-    #     reference_state = normalize_state(reference_state)
-    #
-    #     for i in np.arange(len(control_tasks)):
-    #         control_tasks[i]["xr"] = reference_state  # reference state
-    #
-    #     # compute control energy across all control tasks
-    #     compute_control_energy = ComputeControlEnergy(A=adjacency,
-    #                                                   control_tasks=control_tasks,
-    #                                                   system="continuous", c=c, T=T)
-    #     compute_control_energy.run()
-    #
-    #     # reshape energy into matrix
-    #     control_energy_ref[:, :, ref_state] = np.reshape(compute_control_energy.E, (n_states, n_states))
+        log_args['control_energy_{0}'.format(reference_state)] = control_energy
 
     # save outputs
-    log_args = {
-        'control_energy_xf': control_energy_xf,
-        'control_energy_midpoint': control_energy_midpoint,
-        'control_energy_zero': control_energy_zero,
-        # 'control_energy_ref': control_energy_ref,
-    }
-    file_str = '{0}control_energy_k-{1}_T-{2}_c-{3}_rho-{4}'.format(file_prefix, n_states, T, c, rho)
+    if optimal_control:
+        file_str = '{0}optimal_control_energy_k-{1}_c-{2}_T-{3}_rho-{4}'.format(file_prefix, n_states, c, time_horizon, rho)
+    else:
+        file_str = '{0}minimum_control_energy_k-{1}_c-{2}_T-{3}_rho-{4}'.format(file_prefix, n_states, c, time_horizon, rho)
     np.save(os.path.join(outdir, file_str), log_args)
 
     end = time.time()
@@ -147,21 +110,17 @@ def get_args():
     '''
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--indir', type=str, default='/media/lindenmp/storage_ssd/research_projects/nct_xr/data')
+    parser.add_argument('--indir', type=str, default='/home/lindenmp/research_projects/nct_xr/data')
     parser.add_argument('--outdir', type=str, default='/home/lindenmp/research_projects/nct_xr/results')
     parser.add_argument('--A_file', type=str, default='hcp_schaefer400-7_Am.npy')
-    parser.add_argument('--fmri_clusters_file', type=str, default='hcp_fmri_clusters_k-10.npy')
+    parser.add_argument('--fmri_clusters_file', type=str, default='hcp_fmri_clusters_k-7.npy')
     parser.add_argument('--file_prefix', type=str, default='hcp_')
-    # parser.add_argument('--indir', type=str, default='/media/lindenmp/storage_ssd/research_projects/nct_xr/data/probabilistic_sift_radius2_count')
-    # parser.add_argument('--outdir', type=str, default='/home/lindenmp/research_projects/nct_xr/results')
-    # parser.add_argument('--A_file', type=str, default='pnc_schaefer400-7_Am.npy')
-    # parser.add_argument('--fmri_clusters_file', type=str, default='pnc_fmri_clusters_k-5.npy')
-    # parser.add_argument('--file_prefix', type=str, default='pnc_')
 
     # settings
-    parser.add_argument('--T', type=int, default=1)
+    parser.add_argument('--optimal_control', type=bool, default=True)
     parser.add_argument('--c', type=int, default=1)
-    parser.add_argument('--rho', type=float, default=0.1)
+    parser.add_argument('--time_horizon', type=int, default=1)
+    parser.add_argument('--rho', type=float, default=1)
 
     args = parser.parse_args()
     args.indir = os.path.expanduser(args.indir)
@@ -181,8 +140,9 @@ if __name__ == '__main__':
         'file_prefix': args.file_prefix,
 
         # settings
-        'T': args.T,
+        'optimal_control': args.optimal_control,
         'c': args.c,
+        'time_horizon': args.time_horizon,
         'rho': args.rho,
     }
 
