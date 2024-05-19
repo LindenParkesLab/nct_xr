@@ -64,6 +64,7 @@ def run(config):
     eig_weight = config['eig_weight']  # regularization strength for eigen value penalty
     reg_weight = config['reg_weight']  # regularization strength for weight penalty (e.g., l2)
     reg_type = config['reg_type']  # regularization type: l1 or l2
+    early_stopping = config['early_stopping']
     print('\ttraining params: reference_state = {0}; init_weights = {1}; n_steps = {2}; lr = {3}; eig_weight = {4}; reg_weight = {5}; reg_type = {6}'.format(reference_state, init_weights, n_steps,
                                                                                                                                                              lr, eig_weight, reg_weight, reg_type))
 
@@ -95,7 +96,7 @@ def run(config):
                 eigen_values[initial_idx, target_idx], \
                 optimized_weights[initial_idx, target_idx] = train_nct(adjacency_norm=adjacency_norm, initial_state=initial_state, target_state=target_state, time_horizon=time_horizon, control_set=control_set,
                                                                     reference_state=reference_state, rho=rho, trajectory_constraints=trajectory_constraints, init_weights=init_weights,
-                                                                    n_steps=n_steps, lr=lr, eig_weight=eig_weight, reg_weight=reg_weight, reg_type=reg_type, early_stopping=True)
+                                                                    n_steps=n_steps, lr=lr, eig_weight=eig_weight, reg_weight=reg_weight, reg_type=reg_type, early_stopping=early_stopping)
                 try:
                     idx = np.where(np.isnan(loss[initial_idx, target_idx]))[0][0] - 1
                 except:
@@ -163,6 +164,7 @@ def get_args():
     parser.add_argument('--eig_weight', type=float, default=0.1)
     parser.add_argument('--reg_weight', type=float, default=0.001)
     parser.add_argument('--reg_type', type=str, default='l2')
+    parser.add_argument('--early_stopping', type=bool, default=True)
 
     args = parser.parse_args()
     args.indir = os.path.expanduser(args.indir)
@@ -193,6 +195,7 @@ if __name__ == '__main__':
         'eig_weight': args.eig_weight,
         'reg_weight': args.reg_weight,
         'reg_type': args.reg_type,
+        'early_stopping': args.early_stopping,
     }
 
     run(config=config)
