@@ -32,7 +32,6 @@ def run(config):
     outdir = config['outdir']
     A_file = config['A_file']
     fmri_clusters_file = config['fmri_clusters_file']
-    file_prefix = config['file_prefix']
 
     # load rsfMRI clusters
     fmri_clusters = np.load(os.path.join(outdir, fmri_clusters_file), allow_pickle=True).item()
@@ -50,12 +49,6 @@ def run(config):
     print('Computing control energy.')
     print('\tnct params: c = {0}; time_horizon = {1}; rho = {2}'.format(c, time_horizon, rho))
 
-    # load A matrix
-    adjacency = np.load(os.path.join(indir, A_file))
-
-    # normalize adjacency matrix
-    adjacency_norm = matrix_normalization(adjacency, system=system, c=c)
-
     # training params
     reference_state = config['reference_state']
     init_weights = config['init_weights']
@@ -68,15 +61,32 @@ def run(config):
     print('\ttraining params: reference_state = {0}; init_weights = {1}; n_steps = {2}; lr = {3}; eig_weight = {4}; reg_weight = {5}; reg_type = {6}'.format(reference_state, init_weights, n_steps,
                                                                                                                                                              lr, eig_weight, reg_weight, reg_type))
 
+    # load A matrix
+    adjacency = np.load(os.path.join(indir, A_file))
+    if adjacency.ndim == 2:
+        print('Found group averaged connectome')
+        file_prefix = '{0}_'.format(config['file_prefix'])
+    elif adjacency.ndim == 3:
+        print('Found subject level connectomes')
+        subj_idx = config['subj_idx']
+        file_prefix = '{0}-subj-{1}_'.format(config['file_prefix'], subj_idx)
+
     file_str = '{0}optimized_control_energy_k-{1}_c-{2}_T-{3}_rho-{4}_refstate-{5}_initweights-{6}_nsteps-{7}_lr-{8}_eigweight-{9}_regweight-{10}_regtype-{11}'.format(file_prefix, 
                                                                                                                                                                        n_states, 
                                                                                                                                                                        c, time_horizon, rho,
                                                                                                                                                                        reference_state, init_weights,
                                                                                                                                                                        n_steps, lr, eig_weight, reg_weight, reg_type)
+    print(file_str)
 
     if os.path.isfile(os.path.join(outdir, file_str + '.npy')):
         print('Output found. Skipping.')
     else:
+        # normalize adjacency matrix
+        if adjacency.ndim == 2:
+            adjacency_norm = matrix_normalization(adjacency, system=system, c=c)
+        elif adjacency.ndim == 3:
+            adjacency_norm = matrix_normalization(adjacency[:, :, subj_idx], system=system, c=c)
+
         # compute control energy
         start = time.time()
         log_args = dict()
@@ -95,8 +105,8 @@ def run(config):
                 loss[initial_idx, target_idx], \
                 eigen_values[initial_idx, target_idx], \
                 optimized_weights[initial_idx, target_idx] = train_nct(adjacency_norm=adjacency_norm, initial_state=initial_state, target_state=target_state, time_horizon=time_horizon, control_set=control_set,
-                                                                    reference_state=reference_state, rho=rho, trajectory_constraints=trajectory_constraints, init_weights=init_weights,
-                                                                    n_steps=n_steps, lr=lr, eig_weight=eig_weight, reg_weight=reg_weight, reg_type=reg_type, early_stopping=early_stopping)
+                                                                       reference_state=reference_state, rho=rho, trajectory_constraints=trajectory_constraints, init_weights=init_weights,
+                                                                       n_steps=n_steps, lr=lr, eig_weight=eig_weight, reg_weight=reg_weight, reg_type=reg_type, early_stopping=early_stopping)
                 try:
                     idx = np.where(np.isnan(loss[initial_idx, target_idx]))[0][0] - 1
                 except:
@@ -109,7 +119,7 @@ def run(config):
                 adjacency_norm_opt = adjacency_norm.copy()
                 adjacency_norm_opt[np.eye(n_nodes) == 1] = adjacency_weights
                 _, control_signals, _ = get_control_inputs(A_norm=adjacency_norm_opt, x0=initial_state, xf=target_state,
-                                                        T=time_horizon, B=control_set, xr=reference_state, rho=rho, S=trajectory_constraints, system=system)
+                                                           T=time_horizon, B=control_set, xr=reference_state, rho=rho, S=trajectory_constraints, system=system)
                 # integrate control signals to get control energy
                 node_energy = integrate_u(control_signals)
                 # summarize nodal energy
@@ -119,7 +129,7 @@ def run(config):
                 adjacency_norm_opt = adjacency_norm.copy()
                 adjacency_norm_opt[np.eye(n_nodes) == 1] = np.mean(adjacency_weights)
                 _, control_signals, _ = get_control_inputs(A_norm=adjacency_norm_opt, x0=initial_state, xf=target_state,
-                                                        T=time_horizon, B=control_set, xr=reference_state, rho=rho, S=trajectory_constraints, system=system)
+                                                           T=time_horizon, B=control_set, xr=reference_state, rho=rho, S=trajectory_constraints, system=system)
                 # integrate control signals to get control energy
                 node_energy = integrate_u(control_signals)
                 # summarize nodal energy
@@ -150,7 +160,8 @@ def get_args():
     parser.add_argument('--outdir', type=str, default='/home/lindenmp/research_projects/nct_xr/results')
     parser.add_argument('--A_file', type=str, default='hcp_schaefer400-7_Am-features_schaefer_streamcount_areanorm_log.npy')
     parser.add_argument('--fmri_clusters_file', type=str, default='hcp_fmri_clusters_k-7.npy')
-    parser.add_argument('--file_prefix', type=str, default='hcp_')
+    parser.add_argument('--file_prefix', type=str, default='hcp')
+    parser.add_argument('--subj_idx', type=int, default=0)
 
     # settings
     parser.add_argument('--c', type=int, default=1)
@@ -182,6 +193,7 @@ if __name__ == '__main__':
         'A_file': args.A_file,
         'fmri_clusters_file': args.fmri_clusters_file,
         'file_prefix': args.file_prefix,
+        'subj_idx': args.subj_idx,
 
         # settings
         'c': args.c,
