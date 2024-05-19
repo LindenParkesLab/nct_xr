@@ -10,13 +10,15 @@ from nctpy.energies import get_control_inputs, integrate_u
 from nctpy.utils import normalize_state, matrix_normalization
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+# device = 'cpu'
 
 class NCT(nn.Module):
     def __init__(self, adjacency_norm, 
                  initial_state, target_state,
                  time_horizon, control_set,
                  reference_state, rho, trajectory_constraints,
-                 eig_weight=0.001, reg_weight=0.001):
+                 init_weights='one',
+                 eig_weight=0.1, reg_weight=0.0001, reg_type='l2'):
         super().__init__()
         n_nodes = adjacency_norm.shape[0]
 
@@ -44,7 +46,13 @@ class NCT(nn.Module):
 
         # Initialize parameters
         self.n_nodes = torch.tensor(n_nodes).to(device)
-        self.register_parameter(name='adjacency_weights', param=torch.nn.Parameter(torch.ones((self.n_nodes, 1)).to(device)))
+        if init_weights == 'zero':
+            adjacency_weights = np.zeros((self.n_nodes, 1))
+        elif init_weights == 'one':
+            adjacency_weights = np.ones((self.n_nodes, 1))
+        # print(adjacency_weights)
+        adjacency_weights = torch.from_numpy(adjacency_weights).to(device)
+        self.register_parameter(name='adjacency_weights', param=torch.nn.Parameter(adjacency_weights))
 
         # Save remaining variables
         self.adjacency_norm = torch.tensor(adjacency_norm).to(device)
@@ -64,6 +72,7 @@ class NCT(nn.Module):
         self.IO = torch.concat((self.I, self.O), dim=1).to(device)
         self.eig_weight = eig_weight
         self.reg_weight = reg_weight
+        self.reg_type = reg_type
 
 
     def eigen_value_loss(self, adjacency_sub):
@@ -88,7 +97,7 @@ class NCT(nn.Module):
         adjacency_sub = self.adjacency_norm - torch.diag(self.adjacency_weights[:, 0])
 
         _, eig_val_loss = self.eigen_value_loss(adjacency_sub=adjacency_sub)
-        reg = self.regularization(adjacency_sub=adjacency_sub, type='l2', reg_weight=self.reg_weight)
+        reg = self.regularization(adjacency_sub=adjacency_sub, type=self.reg_type, reg_weight=self.reg_weight)
 
         # define joint state-costate matrix
         M = torch.concat((
@@ -128,14 +137,16 @@ class NCT(nn.Module):
 def train_nct(adjacency_norm, initial_state, target_state,
               time_horizon=1, control_set='identity',
               reference_state='zero', rho=1, trajectory_constraints='identity',
-              n_steps=1000, lr=0.001, eig_weight=0.001, reg_weight=0.001):
+              init_weights='one',
+              n_steps=1000, lr=0.001, eig_weight=0.001, reg_weight=0.001, reg_type='l2',
+              early_stopping=True):
     n_nodes = adjacency_norm.shape[0]
 
     if type(reference_state) == str and reference_state == 'zero':
         reference_state = np.zeros((1, n_nodes, 1))
     elif type(reference_state) == str and reference_state == 'midpoint':
         reference_state = initial_state + ((target_state - initial_state) * 0.5)
-    elif type(reference_state) == str and reference_state == 'target_state':
+    elif type(reference_state) == str and reference_state == 'xf':
         reference_state = target_state
     if reference_state.ndim == 1:
         reference_state = reference_state[np.newaxis, :, np.newaxis]
@@ -149,14 +160,16 @@ def train_nct(adjacency_norm, initial_state, target_state,
     nct = NCT(adjacency_norm=adjacency_norm, initial_state=initial_state, target_state=target_state,
               time_horizon=time_horizon, control_set=control_set,
               reference_state=reference_state, rho=rho, trajectory_constraints=trajectory_constraints,
-              eig_weight=eig_weight, reg_weight=reg_weight)
+              init_weights=init_weights,
+              eig_weight=eig_weight, reg_weight=reg_weight, reg_type=reg_type)
     opt = torch.optim.Adam(nct.parameters(), lr=lr)
     nct.train()
 
     loss = np.zeros(n_steps)
     eigen_values = np.zeros(n_steps)
     optimized_weights = np.zeros((n_steps, n_nodes))
-    stopping_window = int(n_steps * .10)
+    if early_stopping:
+        stopping_window = int(n_steps * .20)
     for i in tqdm(np.arange(n_steps)):
         opt.zero_grad()
         nct().backward()
@@ -167,10 +180,11 @@ def train_nct(adjacency_norm, initial_state, target_state,
         adjacency_sub = adjacency_norm - np.diag(optimized_weights[i, :])
         eigen_values[i] = np.max(np.linalg.eigvalsh(adjacency_sub))
         
-        if i > stopping_window:
-            loss_std = np.round(np.std(loss[i-stopping_window:i]), 2)
-            if loss_std == 0.0:
-                print('Hit early stopping criteria (std[loss] = {:.2f}) at step {:}. Exiting...'.format(loss_std, i))
+        if early_stopping and i > stopping_window:
+            loss_var = np.round(np.var(loss[i-stopping_window:i]), 4)
+            eig_var = np.round(np.var(eigen_values[i-stopping_window:i]), 4)
+            if loss_var == 0 and eig_var == 0:
+                print('Hit early stopping criteria (var[loss] = {:.4f}; var[eigen_values] = {:.4f}) at step {:}. Exiting...'.format(loss_var, eig_var, i))
                 loss[i+1:] = np.nan
                 eigen_values[i+1:] = np.nan
                 optimized_weights[i+1:, :] = np.nan
@@ -187,8 +201,13 @@ if __name__ == '__main__':
     start = time.time()
     indir = '/home/lindenmp/research_projects/nct_xr/data'
     outdir = '/home/lindenmp/research_projects/nct_xr/results'
-    A_file = 'hcp_schaefer400-7_Am.npy'
-    fmri_clusters_file = 'hcp_fmri_clusters_k-3.npy'
+    # feature = 'features_schaefer_streamcount'
+    # feature = 'features_schaefer_streamcount_log'
+    feature = 'features_schaefer_streamcount_areanorm_log'
+    # feature = 'features_schaefer_streamcount_volnorm_log'
+    A_file = 'hcp_schaefer400-7_Am-{0}.npy'.format(feature)
+    print(A_file)
+    fmri_clusters_file = 'hcp_fmri_clusters_k-7.npy'
     
     # load A matrix
     adjacency = np.load(os.path.join(indir, A_file))
@@ -208,27 +227,31 @@ if __name__ == '__main__':
 
     # normalize adjacency matrix
     adjacency_norm = matrix_normalization(adjacency, system=system, c=c)
+    # adjacency_norm = adjacency_norm + np.diag(np.zeros(n_nodes) + 0.5)
     
     # brain states
     initial_state = normalize_state(centroids[0, :])  # initial state
     target_state = normalize_state(centroids[2, :])  # target state
-    reference_state = 'zero'  # reference state
-    # reference_state = 'midpoint'  # reference state
+    reference_state = 'midpoint'  # reference state
     reference_state_str = reference_state
-    # reference_state = target_state
-    # reference_state_str = 'targetstate'
 
     # training params
+    init_weights = 'one'
     n_steps = 1000  # number of gradient steps
     lr = 0.01  # learning rate for gradient
-    eig_weight = 0.001  # regularization strength for eigen value penalty
-    reg_weight = 0.001  # regularization strength for weight penalty (e.g., l2)
-    print('n_steps = {0}; lr = {1}; eig_weight = {2}; reg_weight = {3}'.format(n_steps, lr, eig_weight, reg_weight))
+    eig_weight = 0.1  # regularization strength for eigen value penalty
+    reg_weight = 0.0  # regularization strength for weight penalty (e.g., l2)
+    reg_type = 'l2'
+    print('training params: init_weights = {0}; n_steps = {1}; lr = {2}; eig_weight = {3}; reg_weight = {4}; reg_type = {5}'.format(init_weights, 
+                                                                                                                                    n_steps,
+                                                                                                                                    lr, eig_weight, reg_weight, reg_type))
     # run training
     loss, eigen_values, opt_weights = train_nct(adjacency_norm=adjacency_norm, initial_state=initial_state, target_state=target_state,
-                                            time_horizon=time_horizon, control_set=control_set,
-                                            reference_state=reference_state, rho=rho, trajectory_constraints=trajectory_constraints,
-                                            n_steps=n_steps, lr=lr, eig_weight=eig_weight, reg_weight=reg_weight)
+                                                time_horizon=time_horizon, control_set=control_set,
+                                                reference_state=reference_state, rho=rho, trajectory_constraints=trajectory_constraints,
+                                                init_weights=init_weights,
+                                                n_steps=n_steps, lr=lr, eig_weight=eig_weight, reg_weight=reg_weight, reg_type=reg_type,
+                                                early_stopping=True)
     
         # save outputs
     log_args = {
@@ -236,7 +259,11 @@ if __name__ == '__main__':
         'eigen_values': eigen_values,
         'opt_weights': opt_weights
     }
-    file_str = 'neural_network_nsteps-{0}_lr-{1}_eig-weight-{2}_reg-weight-{3}_{4}'.format(n_steps, lr, eig_weight, reg_weight, reference_state_str)
+    file_str = 'neural_network_c-{0}_T-{1}_rho-{2}_refstate-{3}_weights-{4}_nsteps-{5}_lr-{6}_eigweight-{7}_regweight-{8}_regtype-{9}_{10}'.format(c, time_horizon, rho,
+                                                                                                                                                   reference_state_str, init_weights,
+                                                                                                                                                   n_steps, lr, eig_weight, reg_weight, reg_type,
+                                                                                                                                                   feature)
+    print(file_str)
     np.save(os.path.join(outdir, file_str), log_args)
 
     end = time.time()
