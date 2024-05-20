@@ -1,20 +1,9 @@
 # import
 import os, sys, warnings, argparse, time
 import numpy as np
-import scipy as sp
-from tqdm import tqdm
-from scipy import stats
-from sklearn.cluster import KMeans
-from nilearn import datasets
 
 sys.path.extend(['/home/lindenmp/research_projects/snaplab_tools'])
 sys.path.extend(['/home/lindenmp/research_projects/nctpy/src'])
-
-# import plotting libraries
-import matplotlib.pyplot as plt
-plt.rcParams.update({"font.size": 10})
-plt.rcParams["svg.fonttype"] = "none"
-import seaborn as sns
 
 from snaplab_tools.plotting.utils import set_plotting_params
 from nctpy.energies import get_control_inputs, integrate_u
