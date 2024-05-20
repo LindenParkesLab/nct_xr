@@ -172,8 +172,8 @@ def get_args():
     parser.add_argument('--init_weights', type=str, default='one')
     parser.add_argument('--n_steps', type=int, default=1000)
     parser.add_argument('--lr', type=float, default=0.01)
-    parser.add_argument('--eig_weight', type=float, default=0.1)
-    parser.add_argument('--reg_weight', type=float, default=0.001)
+    parser.add_argument('--eig_weight', type=float, default=1.0)
+    parser.add_argument('--reg_weight', type=float, default=0.0001)
     parser.add_argument('--reg_type', type=str, default='l2')
     parser.add_argument('--early_stopping', type=bool, default=True)
 
