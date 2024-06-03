@@ -65,7 +65,7 @@ def run(config):
     elif adjacency.ndim == 3:
         print('Found {0} subject level connectomes'.format(adjacency.shape[-1]))
         subj_idx = config['subj_idx']
-        file_prefix = '{0}-subj-{1}_'.format(config['file_prefix'], subj_idx)
+        file_prefix = '{0}-{1}_'.format(config['file_prefix'], subj_idx)
         
     if config['optimal_control']:
         file_prefix += 'optimal-'
@@ -78,6 +78,12 @@ def run(config):
                                                                                                                                                                 reference_state, init_weights,
                                                                                                                                                                 n_steps, lr, eig_weight, reg_weight, reg_type)
     print(file_str)
+
+    if config['outsubdir'] != '':
+        outdir = os.path.join(outdir, config['outsubdir'])
+        print(outdir)
+        if not os.path.isdir(outdir):
+            os.makedirs(outdir)
 
     if os.path.isfile(os.path.join(outdir, file_str + '.npy')):
         print('Output found. Skipping.')
@@ -207,6 +213,7 @@ def get_args():
 
     parser.add_argument('--indir', type=str, default='/home/lindenmp/research_projects/nct_xr/data')
     parser.add_argument('--outdir', type=str, default='/home/lindenmp/research_projects/nct_xr/results')
+    parser.add_argument('--outsubdir', type=str, default='')
     parser.add_argument('--A_file', type=str, default='hcp_schaefer400-7_Am-features_schaefer_streamcount_areanorm_log.npy')
     parser.add_argument('--fmri_clusters_file', type=str, default='hcp_fmri_clusters_k-7.npy')
     parser.add_argument('--file_prefix', type=str, default='hcp')
@@ -250,6 +257,7 @@ if __name__ == '__main__':
     config = {
         'indir': args.indir,
         'outdir': args.outdir,
+        'outsubdir': args.outsubdir,
         'A_file': args.A_file,
         'fmri_clusters_file': args.fmri_clusters_file,
         'file_prefix': args.file_prefix,
