@@ -1,11 +1,15 @@
 # import
-import os, sys, warnings, argparse, time
+import os, sys, warnings, argparse, time, getpass
 import numpy as np
 
-sys.path.extend(['/home/lindenmp/research_projects/snaplab_tools'])
-sys.path.extend(['/home/lindenmp/research_projects/nctpy/src'])
+username = getpass.getuser()
+if username == 'lindenmp':
+    sys.path.extend(['/home/lindenmp/research_projects/snaplab_tools'])
+    sys.path.extend(['/home/lindenmp/research_projects/nctpy/src'])
+elif username == 'lp756':
+    sys.path.extend(['/home/lp756/projects/f_ah1491_1/lindenmp/research_projects/snaplab_tools'])
+    sys.path.extend(['/home/lp756/projects/f_ah1491_1/lindenmp/research_projects/nctpy/src'])
 
-from snaplab_tools.plotting.utils import set_plotting_params
 from nctpy.energies import get_control_inputs, integrate_u
 from nctpy.utils import normalize_state, matrix_normalization
 from src.neural_network import train_nct
@@ -16,7 +20,6 @@ warnings.simplefilter(action='ignore', category=UserWarning)
 
 # %%
 def run(config):
-    set_plotting_params()
     indir = config['indir']
     outdir = config['outdir']
     A_file = config['A_file']
@@ -34,7 +37,11 @@ def run(config):
     time_horizon = config['time_horizon']
     rho = config['rho']    
     control_set = np.eye(n_nodes)  # define control set using a uniform full control set
-    trajectory_constraints = np.eye(n_nodes)  # define state trajectory constraints
+    if config['optimal_control']:
+        trajectory_constraints = np.eye(n_nodes)  # define state trajectory constraints
+    else:
+        trajectory_constraints = np.zeros((n_nodes, n_nodes))  # define state trajectory constraints
+
     print('Computing control energy.')
     print('\tnct params: c = {0}; time_horizon = {1}; rho = {2}'.format(c, time_horizon, rho))
 
@@ -56,15 +63,20 @@ def run(config):
         print('Found group averaged connectome')
         file_prefix = '{0}_'.format(config['file_prefix'])
     elif adjacency.ndim == 3:
-        print('Found subject level connectomes')
+        print('Found {0} subject level connectomes'.format(adjacency.shape[-1]))
         subj_idx = config['subj_idx']
         file_prefix = '{0}-subj-{1}_'.format(config['file_prefix'], subj_idx)
+        
+    if config['optimal_control']:
+        file_prefix += 'optimal-'
+    else:
+        file_prefix += 'minimum-'
 
-    file_str = '{0}optimized_control_energy_k-{1}_c-{2}_T-{3}_rho-{4}_refstate-{5}_initweights-{6}_nsteps-{7}_lr-{8}_eigweight-{9}_regweight-{10}_regtype-{11}'.format(file_prefix, 
-                                                                                                                                                                       n_states, 
-                                                                                                                                                                       c, time_horizon, rho,
-                                                                                                                                                                       reference_state, init_weights,
-                                                                                                                                                                       n_steps, lr, eig_weight, reg_weight, reg_type)
+    file_str = '{0}optimized-energy_k-{1}_c-{2}_T-{3}_rho-{4}_refstate-{5}_initweights-{6}_nsteps-{7}_lr-{8}_eigweight-{9}_regweight-{10}_regtype-{11}'.format(file_prefix, 
+                                                                                                                                                                n_states, 
+                                                                                                                                                                c, time_horizon, rho,
+                                                                                                                                                                reference_state, init_weights,
+                                                                                                                                                                n_steps, lr, eig_weight, reg_weight, reg_type)
     print(file_str)
 
     if os.path.isfile(os.path.join(outdir, file_str + '.npy')):
@@ -82,7 +94,17 @@ def run(config):
         loss = np.zeros((n_states, n_states, n_steps))
         eigen_values = np.zeros((n_states, n_states, n_steps))
         optimized_weights = np.zeros((n_states, n_states, n_steps, n_nodes))
+
+        state_trajectory = np.zeros((n_states, n_states, 1001, n_nodes))
+        numerical_error = np.zeros((n_states, n_states, 2))
+        control_energy = np.zeros((n_states, n_states))
+
+        state_trajectory_variable_decay = np.zeros((n_states, n_states, 1001, n_nodes))
+        numerical_error_variable_decay = np.zeros((n_states, n_states, 2))
         control_energy_variable_decay = np.zeros((n_states, n_states))
+
+        state_trajectory_static_decay = np.zeros((n_states, n_states, 1001, n_nodes))
+        numerical_error_static_decay = np.zeros((n_states, n_states, 2))
         control_energy_static_decay = np.zeros((n_states, n_states))
 
         for initial_idx in np.arange(n_states):
@@ -91,11 +113,28 @@ def run(config):
                 print('initial_state = {0}, target_state = {1}'.format(initial_idx, target_idx))
                 target_state = normalize_state(centroids[target_idx, :])  # target state
 
+                ##############################################################################################################################################
+                # 1) get bog standard optimal control energy
+                state_trajectory[initial_idx, target_idx], control_signals, n_err = get_control_inputs(A_norm=adjacency_norm, x0=initial_state, xf=target_state,
+                                                                                                       T=time_horizon, B=control_set, xr=reference_state,
+                                                                                                       rho=rho, S=trajectory_constraints, system=system)
+                numerical_error[initial_idx, target_idx, 0] = n_err[0]
+                numerical_error[initial_idx, target_idx, 1] = n_err[1]
+                # integrate control signals to get control energy
+                node_energy = integrate_u(control_signals)
+                # summarize nodal energy
+                control_energy[initial_idx, target_idx] = np.sum(node_energy)       
+                ##############################################################################################################################################
+
+                ##############################################################################################################################################
+                # 2) train model to get opimtizied decay rates
                 loss[initial_idx, target_idx], \
                 eigen_values[initial_idx, target_idx], \
-                optimized_weights[initial_idx, target_idx] = train_nct(adjacency_norm=adjacency_norm, initial_state=initial_state, target_state=target_state, time_horizon=time_horizon, control_set=control_set,
-                                                                       reference_state=reference_state, rho=rho, trajectory_constraints=trajectory_constraints, init_weights=init_weights,
-                                                                       n_steps=n_steps, lr=lr, eig_weight=eig_weight, reg_weight=reg_weight, reg_type=reg_type, early_stopping=early_stopping)
+                optimized_weights[initial_idx, target_idx] = train_nct(adjacency_norm=adjacency_norm, initial_state=initial_state, target_state=target_state, 
+                                                                       time_horizon=time_horizon, control_set=control_set, reference_state=reference_state, 
+                                                                       rho=rho, trajectory_constraints=trajectory_constraints, init_weights=init_weights,
+                                                                       n_steps=n_steps, lr=lr, eig_weight=eig_weight, reg_weight=reg_weight, reg_type=reg_type,
+                                                                       early_stopping=early_stopping)
                 try:
                     idx = np.where(np.isnan(loss[initial_idx, target_idx]))[0][0] - 1
                 except:
@@ -103,31 +142,52 @@ def run(config):
                 adjacency_weights = -1 - optimized_weights[initial_idx, target_idx, idx, :]
                 if np.any(adjacency_weights > 0):
                     print('warning, positive weights found')
-                            
-                # get the state trajectory and the control signals with VARIABLE optimized self-inhibition weights
+                ##############################################################################################################################################
+
+                ##############################################################################################################################################
+                # 3) get the state trajectory and the control signals with VARIABLE optimized self-inhibition weights
                 adjacency_norm_opt = adjacency_norm.copy()
                 adjacency_norm_opt[np.eye(n_nodes) == 1] = adjacency_weights
-                _, control_signals, _ = get_control_inputs(A_norm=adjacency_norm_opt, x0=initial_state, xf=target_state,
-                                                           T=time_horizon, B=control_set, xr=reference_state, rho=rho, S=trajectory_constraints, system=system)
+                state_trajectory_variable_decay[initial_idx, target_idx], control_signals, n_err = get_control_inputs(A_norm=adjacency_norm_opt, x0=initial_state, xf=target_state,
+                                                                                                                      T=time_horizon, B=control_set, xr=reference_state,
+                                                                                                                      rho=rho, S=trajectory_constraints, system=system)
+                numerical_error_variable_decay[initial_idx, target_idx, 0] = n_err[0]
+                numerical_error_variable_decay[initial_idx, target_idx, 1] = n_err[1]
                 # integrate control signals to get control energy
                 node_energy = integrate_u(control_signals)
                 # summarize nodal energy
                 control_energy_variable_decay[initial_idx, target_idx] = np.sum(node_energy)
-                
-                # get the state trajectory and the control signals with STATIC optimized self-inhibition weights
+                ##############################################################################################################################################
+
+                ##############################################################################################################################################
+                # 4) get the state trajectory and the control signals with STATIC optimized self-inhibition weights
                 adjacency_norm_opt = adjacency_norm.copy()
                 adjacency_norm_opt[np.eye(n_nodes) == 1] = np.mean(adjacency_weights)
-                _, control_signals, _ = get_control_inputs(A_norm=adjacency_norm_opt, x0=initial_state, xf=target_state,
-                                                           T=time_horizon, B=control_set, xr=reference_state, rho=rho, S=trajectory_constraints, system=system)
+                state_trajectory_static_decay[initial_idx, target_idx], control_signals, n_err = get_control_inputs(A_norm=adjacency_norm_opt, x0=initial_state, xf=target_state,
+                                                                                                                    T=time_horizon, B=control_set, xr=reference_state,
+                                                                                                                    rho=rho, S=trajectory_constraints, system=system)
+                numerical_error_static_decay[initial_idx, target_idx, 0] = n_err[0]
+                numerical_error_static_decay[initial_idx, target_idx, 1] = n_err[1]
                 # integrate control signals to get control energy
                 node_energy = integrate_u(control_signals)
                 # summarize nodal energy
                 control_energy_static_decay[initial_idx, target_idx] = np.sum(node_energy)
+                ##############################################################################################################################################
         
+            log_args['state_trajectory'] = state_trajectory
+            log_args['numerical_error'] = numerical_error
+            log_args['control_energy'] = control_energy        
+
             log_args['loss'] = loss
             log_args['eigen_values'] = eigen_values
             log_args['optimized_weights'] = optimized_weights
+
+            log_args['state_trajectory_variable_decay'] = state_trajectory_variable_decay
+            log_args['numerical_error_variable_decay'] = numerical_error_variable_decay
             log_args['control_energy_variable_decay'] = control_energy_variable_decay
+
+            log_args['state_trajectory_static_decay'] = state_trajectory_static_decay
+            log_args['numerical_error_static_decay'] = numerical_error_static_decay
             log_args['control_energy_static_decay'] = control_energy_static_decay
 
         # save outputs
@@ -153,6 +213,7 @@ def get_args():
     parser.add_argument('--subj_idx', type=int, default=0)
 
     # settings
+    parser.add_argument('--optimal_control', type=str, default='True')
     parser.add_argument('--c', type=int, default=1)
     parser.add_argument('--time_horizon', type=int, default=1)
     parser.add_argument('--rho', type=float, default=1)
@@ -164,7 +225,7 @@ def get_args():
     parser.add_argument('--eig_weight', type=float, default=1.0)
     parser.add_argument('--reg_weight', type=float, default=0.0001)
     parser.add_argument('--reg_type', type=str, default='l2')
-    parser.add_argument('--early_stopping', type=bool, default=True)
+    parser.add_argument('--early_stopping', type=str, default='True')
 
     args = parser.parse_args()
     args.indir = os.path.expanduser(args.indir)
@@ -176,6 +237,16 @@ def get_args():
 if __name__ == '__main__':
     args = get_args()
 
+    if args.optimal_control == 'False':
+        optimal_control = False
+    elif args.optimal_control == 'True':
+        optimal_control = True
+
+    if args.early_stopping == 'False':
+        early_stopping = False
+    elif args.early_stopping == 'True':
+        early_stopping = True
+
     config = {
         'indir': args.indir,
         'outdir': args.outdir,
@@ -185,6 +256,7 @@ if __name__ == '__main__':
         'subj_idx': args.subj_idx,
 
         # settings
+        'optimal_control': optimal_control,
         'c': args.c,
         'time_horizon': args.time_horizon,
         'rho': args.rho,
@@ -196,7 +268,7 @@ if __name__ == '__main__':
         'eig_weight': args.eig_weight,
         'reg_weight': args.reg_weight,
         'reg_type': args.reg_type,
-        'early_stopping': args.early_stopping,
+        'early_stopping': early_stopping,
     }
 
     run(config=config)
