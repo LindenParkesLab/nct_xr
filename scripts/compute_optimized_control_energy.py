@@ -2,6 +2,8 @@
 import os, sys, warnings, argparse, time, getpass
 import numpy as np
 import scipy as sp
+import pandas as pd
+from tqdm import tqdm
 
 username = getpass.getuser()
 if username == 'lindenmp':
@@ -14,6 +16,7 @@ elif username == 'lp756':
 from nctpy.energies import get_control_inputs, integrate_u
 from nctpy.utils import normalize_state, matrix_normalization
 from src.neural_network import train_nct
+from snaplab_tools.utils import get_schaefer_system_mask
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 warnings.simplefilter(action='ignore', category=RuntimeWarning)
@@ -35,6 +38,33 @@ def control_energy_helper(inputs):
     xf_error = n_err[1]
  
     return state_trajectory, control_signals, node_energy, control_energy, costate_error, xf_error
+
+
+def get_random_partial_control_set(n_nodes, n_control_nodes, add_small_control=False, seed=0):
+    control_set = np.zeros((n_nodes, n_nodes))
+    if add_small_control:
+        control_set[np.eye(n_nodes) == 1] = 1e-5
+
+    np.random.seed(seed)
+    x = np.random.choice(np.arange(n_nodes), size=n_control_nodes, replace=False)
+    for i in x:
+        control_set[i, i] = 1
+        
+    return control_set
+
+
+def get_yeo_control_set(node_labels, system, add_small_control=False):
+    n_nodes = len(node_labels)
+    control_set = np.zeros((n_nodes, n_nodes))
+    if add_small_control:
+        control_set[np.eye(n_nodes) == 1] = 1e-7
+
+    system_mask = get_schaefer_system_mask(node_labels, system=system)
+    for i in np.arange(n_nodes):
+        if system_mask[i]:
+            control_set[i, i] = 1
+            
+    return control_set
 
 
 def run(config):
@@ -162,6 +192,37 @@ def run(config):
         control_signals_static_decay = np.zeros((n_states, n_states, n_timepoints, n_nodes))
         numerical_error_static_decay = np.zeros((n_states, n_states, 2))
         control_energy_static_decay = np.zeros((n_states, n_states))
+        
+        if config['run_rand_control_set'] is True:
+            n_control_nodes = np.linspace(5, n_nodes-5, 50).astype(int)
+            n_unique_cns = n_control_nodes.shape[0]
+            n_samples = 50
+            print(n_unique_cns, n_control_nodes)
+            
+            control_signals_corr_partial = np.zeros((n_states, n_states, n_unique_cns, n_samples))
+            control_energy_partial = np.zeros((n_states, n_states, n_unique_cns, n_samples))
+            numerical_error_partial = np.zeros((n_states, n_states, n_unique_cns, n_samples))
+            xfcorr_partial = np.zeros((n_states, n_states, n_unique_cns, n_samples))
+
+            control_signals_corr_partial_variable_decay = np.zeros((n_states, n_states, n_unique_cns, n_samples))
+            control_energy_partial_variable_decay = np.zeros((n_states, n_states, n_unique_cns, n_samples))
+            numerical_error_partial_variable_decay = np.zeros((n_states, n_states, n_unique_cns, n_samples))
+            xfcorr_partial_variable_decay = np.zeros((n_states, n_states, n_unique_cns, n_samples))
+            
+        if config['run_yeo_control_set'] is True:
+            parc_centroids = pd.read_csv(config['parc_file'], index_col=0)
+            yeo_systems = ['Vis', 'SomMot', 'DorsAttn', 'SalVentAttn', 'Limbic', 'Cont', 'Default']
+            n_systems = len(yeo_systems)
+
+            control_signals_corr_system = np.zeros((n_states, n_states, n_systems))
+            control_energy_system = np.zeros((n_states, n_states, n_systems))
+            numerical_error_system = np.zeros((n_states, n_states, n_systems))
+            xfcorr_system = np.zeros((n_states, n_states, n_systems))
+
+            control_signals_corr_system_variable_decay = np.zeros((n_states, n_states, n_systems))
+            control_energy_system_variable_decay = np.zeros((n_states, n_states, n_systems))
+            numerical_error_system_variable_decay = np.zeros((n_states, n_states, n_systems))
+            xfcorr_system_variable_decay = np.zeros((n_states, n_states, n_systems))
 
         for initial_idx in np.arange(n_states):
             if permute_state == 'initial':
@@ -184,14 +245,17 @@ def run(config):
                 ##############################################################################################################################################
                 # setup inputs
                 inputs = dict()
-                inputs['adjacency_norm'] = adjacency_norm
-                inputs['initial_state'] = initial_state
-                inputs['target_state'] = target_state
+                inputs['adjacency_norm'] = adjacency_norm.copy()
+                inputs['initial_state'] = initial_state.copy()
+                inputs['target_state'] = target_state.copy()
                 inputs['time_horizon'] = time_horizon
-                inputs['control_set'] = control_set
-                inputs['reference_state'] = reference_state
+                inputs['control_set'] = control_set.copy()
+                try:
+                    inputs['reference_state'] = ref_state.copy()
+                except:
+                    inputs['reference_state'] = ref_state
                 inputs['rho'] = rho
-                inputs['trajectory_constraints'] = trajectory_constraints
+                inputs['trajectory_constraints'] = trajectory_constraints.copy()
                 inputs['system'] = system
                 
                 ##############################################################################################################################################
@@ -223,7 +287,7 @@ def run(config):
                 # 3) get the state trajectory and the control signals with VARIABLE optimized self-inhibition weights
                 adjacency_norm_opt = adjacency_norm.copy()
                 adjacency_norm_opt[np.eye(n_nodes) == 1] = adjacency_weights
-                inputs['adjacency_norm'] = adjacency_norm_opt
+                inputs['adjacency_norm'] = adjacency_norm_opt.copy()
 
                 state_trajectory_variable_decay[initial_idx, target_idx], control_signals_variable_decay[initial_idx, target_idx], _, control_energy_variable_decay[initial_idx, target_idx], \
                     numerical_error_variable_decay[initial_idx, target_idx, 0], numerical_error_variable_decay[initial_idx, target_idx, 1] = control_energy_helper(inputs=inputs)
@@ -233,11 +297,74 @@ def run(config):
                 # 4) get the state trajectory and the control signals with STATIC optimized self-inhibition weights
                 adjacency_norm_opt = adjacency_norm.copy()
                 adjacency_norm_opt[np.eye(n_nodes) == 1] = np.mean(adjacency_weights)
-                inputs['adjacency_norm'] = adjacency_norm_opt
+                inputs['adjacency_norm'] = adjacency_norm_opt.copy()
 
                 state_trajectory_static_decay[initial_idx, target_idx], control_signals_static_decay[initial_idx, target_idx], _, control_energy_static_decay[initial_idx, target_idx], \
                     numerical_error_static_decay[initial_idx, target_idx, 0], numerical_error_static_decay[initial_idx, target_idx, 1] = control_energy_helper(inputs=inputs)
                 ##############################################################################################################################################
+
+                # random partial control sets
+                if config['run_rand_control_set'] is True:
+                    print('\trunning random partial control sets...')
+
+                    for i in tqdm(np.arange(n_unique_cns)):
+                        for j in np.arange(n_samples):
+                            inputs['control_set'] = get_random_partial_control_set(n_nodes=n_nodes, n_control_nodes=n_control_nodes[i], add_small_control=False, seed=j)
+
+                            ##############################################################################################################################################
+                            inputs['adjacency_norm'] = adjacency_norm.copy()
+                            
+                            state_traj, control_sig, _, control_energy_partial[initial_idx, target_idx, i, j], \
+                                _, numerical_error_partial[initial_idx, target_idx, i, j] = control_energy_helper(inputs=inputs)
+                            
+                            xfcorr_partial[initial_idx, target_idx, i, j] = sp.stats.pearsonr(state_traj[-1, :], target_state)[0]
+                            control_signals_corr_partial[initial_idx, target_idx, i, j] = np.nanmean(np.abs(np.corrcoef(control_sig.T))[np.triu_indices(n_nodes, k=1)])
+                            ##############################################################################################################################################
+
+                            ##############################################################################################################################################
+                            adjacency_norm_opt = adjacency_norm.copy()
+                            adjacency_norm_opt[np.eye(n_nodes) == 1] = adjacency_weights  
+                            inputs['adjacency_norm'] = adjacency_norm_opt.copy()
+                            
+                            state_traj, control_sig, _, control_energy_partial_variable_decay[initial_idx, target_idx, i, j], \
+                                _, numerical_error_partial_variable_decay[initial_idx, target_idx, i, j] = control_energy_helper(inputs=inputs)
+                            
+                            xfcorr_partial_variable_decay[initial_idx, target_idx, i, j] = sp.stats.pearsonr(state_traj[-1, :], target_state)[0]
+                            control_signals_corr_partial_variable_decay[initial_idx, target_idx, i, j] = np.nanmean(np.abs(np.corrcoef(control_sig.T))[np.triu_indices(n_nodes, k=1)])
+                            ##############################################################################################################################################
+                            
+                # random partial control sets
+                if config['run_yeo_control_set'] is True:
+                    print('\trunning yeo system partial control sets...')
+
+                    for i in tqdm(np.arange(n_systems)):
+                        control_set_yeo = get_yeo_control_set(list(parc_centroids.index), yeo_systems[i], add_small_control=True)
+                        inputs['control_set'] = control_set_yeo.copy()
+                        n_corr_vars = np.sum(control_set_yeo == 1)
+
+                        ##############################################################################################################################################
+                        inputs['adjacency_norm'] = adjacency_norm.copy()
+                        
+                        state_traj, control_sig, _, control_energy_system[initial_idx, target_idx, i], \
+                            _, numerical_error_system[initial_idx, target_idx, i] = control_energy_helper(inputs=inputs)
+                        
+                        xfcorr_system[initial_idx, target_idx, i] = sp.stats.pearsonr(state_traj[-1, :], target_state)[0]
+                        control_sig = control_sig[:, np.diag(control_set_yeo == 1)]
+                        control_signals_corr_system[initial_idx, target_idx, i] = np.nanmean(np.abs(np.corrcoef(control_sig.T))[np.triu_indices(n_corr_vars, k=1)])
+                        ##############################################################################################################################################
+
+                        ##############################################################################################################################################
+                        adjacency_norm_opt = adjacency_norm.copy()
+                        adjacency_norm_opt[np.eye(n_nodes) == 1] = adjacency_weights  
+                        inputs['adjacency_norm'] = adjacency_norm_opt.copy()
+                        
+                        state_traj, control_sig, _, control_energy_system_variable_decay[initial_idx, target_idx, i], \
+                            _, numerical_error_system_variable_decay[initial_idx, target_idx, i] = control_energy_helper(inputs=inputs)
+                        
+                        xfcorr_system_variable_decay[initial_idx, target_idx, i] = sp.stats.pearsonr(state_traj[-1, :], target_state)[0]
+                        control_sig = control_sig[:, np.diag(control_set_yeo == 1)]
+                        control_signals_corr_system_variable_decay[initial_idx, target_idx, i] = np.nanmean(np.abs(np.corrcoef(control_sig.T))[np.triu_indices(n_corr_vars, k=1)])
+                        ##############################################################################################################################################
 
         # save outputs
         if config['compact_save'] is True:
@@ -264,6 +391,28 @@ def run(config):
             log_args['control_signals_variable_decay'] = control_signals_static_decay
             log_args['numerical_error_static_decay'] = numerical_error_static_decay
             log_args['control_energy_static_decay'] = control_energy_static_decay
+            
+            if config['run_rand_control_set'] is True:
+                log_args['control_signals_corr_partial'] = control_signals_corr_partial
+                log_args['control_energy_partial'] = control_energy_partial
+                log_args['numerical_error_partial'] = numerical_error_partial
+                log_args['xfcorr_partial'] = xfcorr_partial
+
+                log_args['control_signals_corr_partial_variable_decay'] = control_signals_corr_partial_variable_decay
+                log_args['control_energy_partial_variable_decay'] = control_energy_partial_variable_decay
+                log_args['numerical_error_partial_variable_decay'] = numerical_error_partial_variable_decay
+                log_args['xfcorr_partial_variable_decay'] = xfcorr_partial_variable_decay
+                
+            if config['run_yeo_control_set'] is True:
+                log_args['control_signals_corr_system'] = control_signals_corr_system
+                log_args['control_energy_system'] = control_energy_system
+                log_args['numerical_error_system'] = numerical_error_system
+                log_args['xfcorr_system'] = xfcorr_system
+
+                log_args['control_signals_corr_system_variable_decay'] = control_signals_corr_system_variable_decay
+                log_args['control_energy_system_variable_decay'] = control_energy_system_variable_decay
+                log_args['numerical_error_system_variable_decay'] = numerical_error_system_variable_decay
+                log_args['xfcorr_system_variable_decay'] = xfcorr_system_variable_decay
 
         np.save(os.path.join(outdir, file_str), log_args)
 
@@ -308,6 +457,10 @@ def get_args():
     parser.add_argument('--reg_type', type=str, default='l2')
     parser.add_argument('--early_stopping', type=str, default='True')
     
+    parser.add_argument('--run_rand_control_set', type=str, default='False')
+    parser.add_argument('--run_yeo_control_set', type=str, default='False')
+    parser.add_argument('--parc_file', type=str, default='/home/lindenmp/research_projects/nct_xr/data/schaefer400-7_centroids.csv')
+
     # save out options
     parser.add_argument('--compact_save', type=str, default='False')
 
@@ -332,6 +485,16 @@ if __name__ == '__main__':
         
     if args.permute_state == 'False':
         args.permute_state = False
+
+    if args.run_rand_control_set == 'False':
+        args.run_rand_control_set = False
+    elif args.run_rand_control_set == 'True':
+        args.run_rand_control_set = True
+        
+    if args.run_yeo_control_set == 'False':
+        args.run_yeo_control_set = False
+    elif args.run_yeo_control_set == 'True':
+        args.run_yeo_control_set = True
 
     if args.compact_save == 'False':
         args.compact_save = False
@@ -363,6 +526,10 @@ if __name__ == '__main__':
         'reg_type': args.reg_type,
         'early_stopping': args.early_stopping,
         
+        'run_rand_control_set': args.run_rand_control_set,
+        'run_yeo_control_set': args.run_yeo_control_set,
+        'parc_file': args.parc_file,
+
         'compact_save': args.compact_save,
     }
 
