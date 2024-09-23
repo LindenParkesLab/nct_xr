@@ -151,6 +151,7 @@ def run(config):
         control_energy_static_decay = np.zeros((n_states, n_states))
         
         if config['run_rand_control_set'] is True:
+            print('run_rand_control_set is True')
             n_control_nodes = np.linspace(5, n_nodes-5, 50).astype(int)
             n_unique_cns = n_control_nodes.shape[0]
             n_samples = 50
@@ -165,21 +166,28 @@ def run(config):
             control_energy_partial_variable_decay = np.zeros((n_states, n_states, n_unique_cns, n_samples))
             numerical_error_partial_variable_decay = np.zeros((n_states, n_states, n_unique_cns, n_samples))
             xfcorr_partial_variable_decay = np.zeros((n_states, n_states, n_unique_cns, n_samples))
+        else:
+            print('run_rand_control_set is False')
             
         if config['run_yeo_control_set'] is True:
+            print('run_yeo_control_set is True')
             parc_centroids = pd.read_csv(config['parc_file'], index_col=0)
             yeo_systems = ['Vis', 'SomMot', 'DorsAttn', 'SalVentAttn', 'Limbic', 'Cont', 'Default']
             n_systems = len(yeo_systems)
 
+            control_signals_system = np.zeros((n_states, n_states, n_timepoints, n_nodes, n_systems))
             control_signals_corr_system = np.zeros((n_states, n_states, n_systems))
             control_energy_system = np.zeros((n_states, n_states, n_systems))
             numerical_error_system = np.zeros((n_states, n_states, n_systems))
             xfcorr_system = np.zeros((n_states, n_states, n_systems))
 
+            control_signals_system_variable_decay = np.zeros((n_states, n_states, n_timepoints, n_nodes, n_systems))
             control_signals_corr_system_variable_decay = np.zeros((n_states, n_states, n_systems))
             control_energy_system_variable_decay = np.zeros((n_states, n_states, n_systems))
             numerical_error_system_variable_decay = np.zeros((n_states, n_states, n_systems))
             xfcorr_system_variable_decay = np.zeros((n_states, n_states, n_systems))
+        else:
+            print('run_yeo_control_set is False')
 
         for initial_idx in np.arange(n_states):
             if permute_state == 'initial':
@@ -306,6 +314,7 @@ def run(config):
                             _, numerical_error_system[initial_idx, target_idx, i] = control_energy_helper(inputs=inputs)
                         
                         xfcorr_system[initial_idx, target_idx, i] = sp.stats.pearsonr(state_traj[-1, :], target_state)[0]
+                        control_signals_system[initial_idx, target_idx, :, :, i] = control_sig.copy()
                         control_sig = control_sig[:, np.diag(control_set_yeo == 1)]
                         control_signals_corr_system[initial_idx, target_idx, i] = np.nanmean(np.abs(np.corrcoef(control_sig.T))[np.triu_indices(n_corr_vars, k=1)])
                         ##############################################################################################################################################
@@ -319,6 +328,7 @@ def run(config):
                             _, numerical_error_system_variable_decay[initial_idx, target_idx, i] = control_energy_helper(inputs=inputs)
                         
                         xfcorr_system_variable_decay[initial_idx, target_idx, i] = sp.stats.pearsonr(state_traj[-1, :], target_state)[0]
+                        control_signals_system_variable_decay[initial_idx, target_idx, :, :, i] = control_sig.copy()
                         control_sig = control_sig[:, np.diag(control_set_yeo == 1)]
                         control_signals_corr_system_variable_decay[initial_idx, target_idx, i] = np.nanmean(np.abs(np.corrcoef(control_sig.T))[np.triu_indices(n_corr_vars, k=1)])
                         ##############################################################################################################################################
@@ -361,11 +371,13 @@ def run(config):
                 log_args['xfcorr_partial_variable_decay'] = xfcorr_partial_variable_decay
                 
             if config['run_yeo_control_set'] is True:
+                log_args['control_signals_system'] = control_signals_system
                 log_args['control_signals_corr_system'] = control_signals_corr_system
                 log_args['control_energy_system'] = control_energy_system
                 log_args['numerical_error_system'] = numerical_error_system
                 log_args['xfcorr_system'] = xfcorr_system
 
+                log_args['control_signals_system_variable_decay'] = control_signals_system_variable_decay
                 log_args['control_signals_corr_system_variable_decay'] = control_signals_corr_system_variable_decay
                 log_args['control_energy_system_variable_decay'] = control_energy_system_variable_decay
                 log_args['numerical_error_system_variable_decay'] = numerical_error_system_variable_decay
@@ -392,7 +404,7 @@ def get_args():
     # parser.add_argument('--fmri_clusters_file_permuted', type=str, default='/home/lindenmp/research_projects/nct_xr/results/hcp_fmri_clusters_k-7_brainsmash-surrogates-5000.npy')
     # parser.add_argument('--fmri_clusters_file_permuted', type=str, default='/home/lindenmp/research_projects/nct_xr/results/hcp_fmri_clusters_k-7_brainsmash-surrogates-reference-5000.npy')
 
-    parser.add_argument('--outdir', type=str, default='/home/lindenmp/research_projects/nct_xr/results')
+    parser.add_argument('--outdir', type=str, default='/home/lindenmp/research_projects/nct_xr/results/new')
     parser.add_argument('--outsubdir', type=str, default='')
 
     parser.add_argument('--file_prefix', type=str, default='hcp-Am')
@@ -414,8 +426,8 @@ def get_args():
     parser.add_argument('--reg_type', type=str, default='l2')
     parser.add_argument('--early_stopping', type=str, default='True')
     
-    parser.add_argument('--run_rand_control_set', type=str, default='False')
-    parser.add_argument('--run_yeo_control_set', type=str, default='False')
+    parser.add_argument('--run_rand_control_set', type=str, default='True')
+    parser.add_argument('--run_yeo_control_set', type=str, default='True')
     parser.add_argument('--parc_file', type=str, default='/home/lindenmp/research_projects/nct_xr/data/schaefer400-7_centroids.csv')
 
     # save out options
