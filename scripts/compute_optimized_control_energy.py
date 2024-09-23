@@ -426,8 +426,8 @@ def get_args():
     parser.add_argument('--reg_type', type=str, default='l2')
     parser.add_argument('--early_stopping', type=str, default='True')
     
-    parser.add_argument('--run_rand_control_set', type=str, default='True')
-    parser.add_argument('--run_yeo_control_set', type=str, default='True')
+    parser.add_argument('--run_rand_control_set', type=str, default='False')
+    parser.add_argument('--run_yeo_control_set', type=str, default='False')
     parser.add_argument('--parc_file', type=str, default='/home/lindenmp/research_projects/nct_xr/data/schaefer400-7_centroids.csv')
 
     # save out options
