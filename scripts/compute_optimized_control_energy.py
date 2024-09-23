@@ -404,7 +404,7 @@ def get_args():
     # parser.add_argument('--fmri_clusters_file_permuted', type=str, default='/home/lindenmp/research_projects/nct_xr/results/hcp_fmri_clusters_k-7_brainsmash-surrogates-5000.npy')
     # parser.add_argument('--fmri_clusters_file_permuted', type=str, default='/home/lindenmp/research_projects/nct_xr/results/hcp_fmri_clusters_k-7_brainsmash-surrogates-reference-5000.npy')
 
-    parser.add_argument('--outdir', type=str, default='/home/lindenmp/research_projects/nct_xr/results/new')
+    parser.add_argument('--outdir', type=str, default='/home/lindenmp/research_projects/nct_xr/results')
     parser.add_argument('--outsubdir', type=str, default='')
 
     parser.add_argument('--file_prefix', type=str, default='hcp-Am')
