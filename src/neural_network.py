@@ -4,7 +4,6 @@ from tqdm import tqdm
 import torch
 from torch import nn
 
-sys.path.extend(['/home/lindenmp/research_projects/nctpy/src'])
 
 from nctpy.energies import get_control_inputs, integrate_u
 from nctpy.utils import normalize_state, matrix_normalization
@@ -35,11 +34,12 @@ class NCT(nn.Module):
             target_state = target_state[:, np.newaxis]
         if reference_state.ndim == 1:
             reference_state = reference_state[np.newaxis, :, np.newaxis]
-        elif reference_state.ndim == 2:
-            reference_state = reference_state[:, :, np.newaxis]
+        # elif reference_state.ndim == 2:
+        #     reference_state = reference_state[:, :, np.newaxis]
         # print(initial_state.shape, target_state.shape, reference_state.shape)
 
-        n_ref_states = reference_state.shape[0]
+        # n_ref_states = reference_state.shape[0]
+        n_ref_states = 1
         tmp = np.linspace(0, time_horizon, n_ref_states + 2)[1:-1]
         reference_state_mean = reference_state.mean(axis=0)
         # print(reference_state_mean.shape)
@@ -98,39 +98,41 @@ class NCT(nn.Module):
 
         _, eig_val_loss = self.eigen_value_loss(adjacency_sub=adjacency_sub)
         reg = self.regularization(adjacency_sub=adjacency_sub, type=self.reg_type, reg_weight=self.reg_weight)
-
+        loss = reg + eig_val_loss
+    
         # define joint state-costate matrix
         M = torch.concat((
             torch.concat((adjacency_sub, torch.matmul(-self.control_set, self.control_set.T) / (2 * self.rho)), dim=1),
             torch.concat((-2 * self.trajectory_constraints, -adjacency_sub.T), dim=1)
         ), dim=0)
-
-        # define constant vector due to cost deviation from reference state
-        c = torch.concat((torch.zeros((self.n_nodes, 1)).to(device),
-                          2 * torch.matmul(self.trajectory_constraints, self.reference_state_mean)), dim=0)
-        c = torch.linalg.solve(M, c)
-
-        # compute costate initial condition
-        EIp = torch.matrix_exp(M * self.tmp[0])
-        E = torch.matrix_power(EIp, self.n_ref_states + 1)
-        r = torch.arange(self.n_nodes)
-        E11 = E[r, :][:, r]
-        E12 = E[r, :][:, r + self.n_nodes.detach().cpu().numpy()]
-        l0 = torch.linalg.solve(E12, (
-                    self.target_state - torch.matmul(E11, self.initial_state) - torch.matmul(torch.concat((E11 - self.I, E12), dim=1), c)))
-        z0 = torch.concat((self.initial_state, l0), dim=0)
-
-        # compute intermediate state and error
-        error = 0
-        EI = self.I2
-        for i in torch.arange(self.n_ref_states):
-            EI = torch.matmul(EI, EIp)
-            xI = torch.matmul(EI[r, :], z0) + torch.matmul(EI[r, :] - self.IO, c)
-            error += torch.linalg.norm(xI - self.reference_state[i, :, :])
-        error = error / self.n_ref_states
-
-        # Return Loss
-        loss = error + eig_val_loss + reg
+    
+        for o in range(self.initial_state.shape[1]):
+            # define constant vector due to cost deviation from reference state
+            c = torch.concat((torch.zeros((self.n_nodes, 1)).to(device),
+                              2 * torch.matmul(self.trajectory_constraints, self.reference_state[:,o:o+1])), dim=0)
+            c = torch.linalg.solve(M, c)
+    
+            # compute costate initial condition
+            EIp = torch.matrix_exp(M * self.tmp[0])
+            E = torch.matrix_power(EIp, self.n_ref_states + 1)
+            r = torch.arange(self.n_nodes)
+            E11 = E[r, :][:, r]
+            E12 = E[r, :][:, r + self.n_nodes.detach().cpu().numpy()]
+            l0 = torch.linalg.solve(E12, (
+                        self.target_state[:,o:o+1] - torch.matmul(E11, self.initial_state[:,o:o+1]) - torch.matmul(torch.concat((E11 - self.I, E12), dim=1), c)))
+            z0 = torch.concat((self.initial_state[:,o:o+1], l0), dim=0)
+    
+            # compute intermediate state and error
+            error = 0
+            EI = self.I2
+            for i in torch.arange(self.n_ref_states):
+                EI = torch.matmul(EI, EIp)
+                xI = torch.matmul(EI[r, :], z0) + torch.matmul(EI[r, :] - self.IO, c)
+                error += torch.linalg.norm(xI - self.reference_state[:,o:o+1])
+            error = error / self.n_ref_states
+    
+            # Return Loss
+            loss = loss + error/self.initial_state.shape[1]
         return loss
    
 
@@ -199,8 +201,8 @@ def train_nct(adjacency_norm, initial_state, target_state,
 
 if __name__ == '__main__':
     start = time.time()
-    indir = '/home/lindenmp/research_projects/nct_xr/data'
-    outdir = '/home/lindenmp/research_projects/nct_xr/results'
+    indir = ''
+    outdir = 'results'
     # feature = 'features_schaefer_streamcount'
     # feature = 'features_schaefer_streamcount_log'
     feature = 'features_schaefer_streamcount_areanorm_log'
@@ -230,14 +232,22 @@ if __name__ == '__main__':
     # adjacency_norm = adjacency_norm + np.diag(np.zeros(n_nodes) + 0.5)
     
     # brain states
-    initial_state = normalize_state(centroids[0, :])  # initial state
-    target_state = normalize_state(centroids[2, :])  # target state
-    reference_state = 'midpoint'  # reference state
+    noff = 0
+    initial_state = np.zeros((centroids.shape[1],np.power(centroids.shape[0]-noff,2)))
+    target_state = np.zeros((centroids.shape[1],np.power(centroids.shape[0]-noff,2)))
+    pInd = 0
+    for i in range(centroids.shape[0]-noff):
+        for j in range(centroids.shape[0]-noff):
+            initial_state[:,pInd] = centroids[i,:]
+            target_state[:,pInd] = centroids[j,:]
+            pInd += 1
+    
+    reference_state = 'xf'  # reference state
     reference_state_str = reference_state
 
     # training params
     init_weights = 'one'
-    n_steps = 1000  # number of gradient steps
+    n_steps = 100  # number of gradient steps
     lr = 0.01  # learning rate for gradient
     eig_weight = 0.1  # regularization strength for eigen value penalty
     reg_weight = 0.0  # regularization strength for weight penalty (e.g., l2)
