@@ -1,15 +1,30 @@
-import os, sys, time
+import os, sys, time, getpass
 import numpy as np
 from tqdm import tqdm
 import torch
 from torch import nn
 
+username = getpass.getuser()
+if username == 'lindenmp':
+    sys.path.extend(['/home/lindenmp/research_projects/snaplab_tools'])
+    sys.path.extend(['/home/lindenmp/research_projects/nctpy/src'])
+elif username == 'lp756':
+    sys.path.extend(['/home/lp756/projects/f_lp756_1/lindenmp/research_projects/snaplab_tools'])
+    sys.path.extend(['/home/lp756/projects/f_lp756_1/lindenmp/research_projects/nctpy/src'])
 
 from nctpy.energies import get_control_inputs, integrate_u
 from nctpy.utils import normalize_state, matrix_normalization
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # device = 'cpu'
+print(device)
+if device == 'cuda':
+    cuda_device = torch.cuda.get_device_name(0)
+    print(cuda_device)
+    
+    if 'Quadro' in cuda_device:
+        device = 'cpu'
+        print(device)
 
 class NCT(nn.Module):
     def __init__(self, adjacency_norm, 
@@ -33,16 +48,7 @@ class NCT(nn.Module):
         if target_state.ndim == 1:
             target_state = target_state[:, np.newaxis]
         if reference_state.ndim == 1:
-            reference_state = reference_state[np.newaxis, :, np.newaxis]
-        # elif reference_state.ndim == 2:
-        #     reference_state = reference_state[:, :, np.newaxis]
-        # print(initial_state.shape, target_state.shape, reference_state.shape)
-
-        # n_ref_states = reference_state.shape[0]
-        n_ref_states = 1
-        tmp = np.linspace(0, time_horizon, n_ref_states + 2)[1:-1]
-        reference_state_mean = reference_state.mean(axis=0)
-        # print(reference_state_mean.shape)
+            reference_state = reference_state[:, np.newaxis]
 
         # Initialize parameters
         self.n_nodes = torch.tensor(n_nodes).to(device)
@@ -61,14 +67,11 @@ class NCT(nn.Module):
         self.initial_state = torch.tensor(initial_state).to(device)
         self.target_state = torch.tensor(target_state).to(device)
         self.reference_state = torch.tensor(reference_state).to(device)
-        self.n_ref_states = torch.tensor(n_ref_states).to(device)
-        self.reference_state_mean = torch.tensor(reference_state_mean).to(device)
         self.rho = torch.tensor(rho).to(device)
         self.trajectory_constraints = torch.tensor(trajectory_constraints).to(device)
         self.I = torch.eye(n_nodes).to(device)
         self.I2 = torch.eye(2 * n_nodes).double().to(device)
         self.O = torch.zeros((n_nodes, n_nodes)).to(device)
-        self.tmp = torch.tensor(tmp).to(device)
         self.IO = torch.concat((self.I, self.O), dim=1).to(device)
         self.eig_weight = eig_weight
         self.reg_weight = reg_weight
@@ -105,34 +108,32 @@ class NCT(nn.Module):
             torch.concat((adjacency_sub, torch.matmul(-self.control_set, self.control_set.T) / (2 * self.rho)), dim=1),
             torch.concat((-2 * self.trajectory_constraints, -adjacency_sub.T), dim=1)
         ), dim=0)
-    
-        for o in range(self.initial_state.shape[1]):
+
+        n_transitions = self.initial_state.shape[1]
+        for transition_idx in np.arange(n_transitions):
             # define constant vector due to cost deviation from reference state
             c = torch.concat((torch.zeros((self.n_nodes, 1)).to(device),
-                              2 * torch.matmul(self.trajectory_constraints, self.reference_state[:,o:o+1])), dim=0)
+                              2 * torch.matmul(self.trajectory_constraints, self.reference_state[:, transition_idx:transition_idx + 1])), dim=0)
             c = torch.linalg.solve(M, c)
     
             # compute costate initial condition
-            EIp = torch.matrix_exp(M * self.tmp[0])
-            E = torch.matrix_power(EIp, self.n_ref_states + 1)
+            EIp = torch.matrix_exp(M * (self.time_horizon / 2))
+            E = torch.matrix_power(EIp, 2)
             r = torch.arange(self.n_nodes)
             E11 = E[r, :][:, r]
             E12 = E[r, :][:, r + self.n_nodes.detach().cpu().numpy()]
             l0 = torch.linalg.solve(E12, (
-                        self.target_state[:,o:o+1] - torch.matmul(E11, self.initial_state[:,o:o+1]) - torch.matmul(torch.concat((E11 - self.I, E12), dim=1), c)))
-            z0 = torch.concat((self.initial_state[:,o:o+1], l0), dim=0)
+                        self.target_state[:, transition_idx:transition_idx + 1] - torch.matmul(E11, self.initial_state[:, transition_idx:transition_idx + 1]) - torch.matmul(torch.concat((E11 - self.I, E12), dim=1), c)))
+            z0 = torch.concat((self.initial_state[:, transition_idx:transition_idx + 1], l0), dim=0)
     
             # compute intermediate state and error
-            error = 0
             EI = self.I2
-            for i in torch.arange(self.n_ref_states):
-                EI = torch.matmul(EI, EIp)
-                xI = torch.matmul(EI[r, :], z0) + torch.matmul(EI[r, :] - self.IO, c)
-                error += torch.linalg.norm(xI - self.reference_state[:,o:o+1])
-            error = error / self.n_ref_states
+            EI = torch.matmul(EI, EIp)
+            xI = torch.matmul(EI[r, :], z0) + torch.matmul(EI[r, :] - self.IO, c)
+            error = torch.linalg.norm(xI - self.reference_state[:, transition_idx:transition_idx + 1])
     
             # Return Loss
-            loss = loss + error/self.initial_state.shape[1]
+            loss += (error / n_transitions)
         return loss
    
 
@@ -201,15 +202,12 @@ def train_nct(adjacency_norm, initial_state, target_state,
 
 if __name__ == '__main__':
     start = time.time()
-    indir = ''
-    outdir = 'results'
-    # feature = 'features_schaefer_streamcount'
-    # feature = 'features_schaefer_streamcount_log'
+    indir = '/home/lindenmp/research_projects/nct_xr/data'
+    outdir = '/home/lindenmp/research_projects/nct_xr/results'
     feature = 'features_schaefer_streamcount_areanorm_log'
-    # feature = 'features_schaefer_streamcount_volnorm_log'
     A_file = 'hcp_schaefer400-7_Am-{0}.npy'.format(feature)
-    print(A_file)
     fmri_clusters_file = 'hcp_fmri_clusters_k-7.npy'
+    print(A_file, fmri_clusters_file)
     
     # load A matrix
     adjacency = np.load(os.path.join(indir, A_file))
@@ -235,19 +233,19 @@ if __name__ == '__main__':
     noff = 0
     initial_state = np.zeros((centroids.shape[1],np.power(centroids.shape[0]-noff,2)))
     target_state = np.zeros((centroids.shape[1],np.power(centroids.shape[0]-noff,2)))
-    pInd = 0
-    for i in range(centroids.shape[0]-noff):
-        for j in range(centroids.shape[0]-noff):
-            initial_state[:,pInd] = centroids[i,:]
-            target_state[:,pInd] = centroids[j,:]
-            pInd += 1
+    transition_idx = 0
+    for initial_idx in np.arange(centroids.shape[0] - noff):
+        for target_idx in np.arange(centroids.shape[0] - noff):
+            initial_state[:, transition_idx] = normalize_state(centroids[initial_idx, :])
+            target_state[:, transition_idx] = normalize_state(centroids[target_idx, :])
+            transition_idx += 1
     
     reference_state = 'xf'  # reference state
     reference_state_str = reference_state
 
     # training params
     init_weights = 'one'
-    n_steps = 100  # number of gradient steps
+    n_steps = 1000  # number of gradient steps
     lr = 0.01  # learning rate for gradient
     eig_weight = 0.1  # regularization strength for eigen value penalty
     reg_weight = 0.0  # regularization strength for weight penalty (e.g., l2)
