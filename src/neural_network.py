@@ -146,13 +146,11 @@ def train_nct(adjacency_norm, initial_state, target_state,
     n_nodes = adjacency_norm.shape[0]
 
     if type(reference_state) == str and reference_state == 'zero':
-        reference_state = np.zeros((1, n_nodes, 1))
+        reference_state = np.zeros(initial_state.shape)
     elif type(reference_state) == str and reference_state == 'midpoint':
         reference_state = initial_state + ((target_state - initial_state) * 0.5)
     elif type(reference_state) == str and reference_state == 'xf':
         reference_state = target_state
-    if reference_state.ndim == 1:
-        reference_state = reference_state[np.newaxis, :, np.newaxis]
 
     if type(control_set) == str and control_set == 'identity':
         control_set = np.eye(n_nodes)
@@ -247,8 +245,8 @@ if __name__ == '__main__':
     init_weights = 'one'
     n_steps = 1000  # number of gradient steps
     lr = 0.01  # learning rate for gradient
-    eig_weight = 0.1  # regularization strength for eigen value penalty
-    reg_weight = 0.0  # regularization strength for weight penalty (e.g., l2)
+    eig_weight = 1.0  # regularization strength for eigen value penalty
+    reg_weight = 0.0001  # regularization strength for weight penalty (e.g., l2)
     reg_type = 'l2'
     print('training params: init_weights = {0}; n_steps = {1}; lr = {2}; eig_weight = {3}; reg_weight = {4}; reg_type = {5}'.format(init_weights, 
                                                                                                                                     n_steps,
