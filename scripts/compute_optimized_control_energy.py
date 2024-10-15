@@ -110,12 +110,11 @@ def run(config):
 
     if config['outsubdir'] != '':
         outdir = os.path.join(outdir, config['outsubdir'])
+    if not os.path.isdir(outdir):
+        os.makedirs(outdir)
     print('saving to.. {0}'.format(outdir))
     if config['compact_save'] is True:
         print('\tusing compact save')
-        
-        if not os.path.isdir(outdir):
-            os.makedirs(outdir)
 
     if os.path.isfile(os.path.join(outdir, file_str + '.npy')):
         print('Output found. Skipping.')
