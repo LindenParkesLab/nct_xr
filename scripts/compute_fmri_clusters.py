@@ -142,6 +142,9 @@ def run(config):
 
     ####################################################################################################################
     print('Saving outputs')
+    if not os.path.isdir(outdir):
+        os.makedirs(outdir)
+    
     # save outpputs
     log_args = {
         'centroids': centroids,
