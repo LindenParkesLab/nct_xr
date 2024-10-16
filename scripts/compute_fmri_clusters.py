@@ -86,11 +86,20 @@ def run(config):
     print('Computing k-means solution. Input shape: {0}, n_clusters = {1}'.format(fmri_concat.shape, n_clusters))
     
     # extract clusters of activity
+    n_timepoints, n_nodes = fmri_concat.shape
     fmri_concat = sp.stats.zscore(fmri_concat, axis=0)
-    kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit(fmri_concat)
-
+    nan_mask = np.sum(np.isnan(fmri_concat), axis=0) > 0
     # extract cluster centers. These represent dominant patterns of recurrent activity over time
-    centroids = kmeans.cluster_centers_
+    if np.any(nan_mask):
+        print('WARNING: Found NaNs in centroids... masking out of k-means')
+        kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit(fmri_concat[:, ~nan_mask])
+        centroids = np.zeros((n_clusters, n_nodes))
+        centroids[:] = np.nan
+        centroids[:, ~nan_mask] = kmeans.cluster_centers_
+    else:
+        kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit(fmri_concat)
+        centroids = kmeans.cluster_centers_
+
     labels = kmeans.labels_
     inertia = kmeans.inertia_
     print(centroids.shape, labels.shape)
@@ -143,9 +152,9 @@ def run(config):
     }
     file_str = '{0}fmri_clusters_k-{1}'.format(file_prefix, n_clusters)
     np.save(os.path.join(outdir, file_str), log_args)
-    if n_clusters == 2:
-        np.save(os.path.join(outdir, 'fmri_clusters_fmri_concat'), fmri_concat)
-        np.save(os.path.join(outdir, 'fmri_clusters_fmri_concat_subjidx'), fmri_concat_subjidx)
+    if n_clusters == 7:
+        np.save(os.path.join(outdir, '{0}fmri_clusters_fmri_concat'.format(file_prefix)), fmri_concat)
+        np.save(os.path.join(outdir, '{0}fmri_clusters_fmri_concat_subjidx'.format(file_prefix)), fmri_concat_subjidx)
     ####################################################################################################################
 
     end = time.time()
