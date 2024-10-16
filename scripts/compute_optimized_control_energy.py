@@ -32,6 +32,10 @@ def run(config):
     # load rsfMRI clusters
     fmri_clusters = np.load(fmri_clusters_file, allow_pickle=True).item()
     centroids = fmri_clusters['centroids']
+    if np.any(np.isnan(centroids)):
+        print('WARNING: Found NaNs in centroids... filling within zeros')
+        nan_mask = np.isnan(centroids)
+        centroids[nan_mask] = 0
     [n_states, n_nodes] = centroids.shape
     print('\nbrain state params: k = {0}'.format(n_states))
     
