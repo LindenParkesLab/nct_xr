@@ -10,6 +10,7 @@ from tqdm import tqdm
 from scipy import stats
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
+from sklearn.linear_model import LinearRegression
 import matplotlib.pyplot as plt
 from snaplab_tools.plotting.plotting import surface_plot
 
@@ -26,7 +27,7 @@ def run(config):
     file_prefix = config['file_prefix']
     n_clusters = config['n_clusters']
 
-    def get_concat_timeseries(fmri_data, retain_subjects=None):
+    def get_concat_timeseries(fmri_data, retain_subjects=None, nuis_regr=True):
         [n_trs, n_nodes, n_scans, n_subs] = fmri_data.shape
         # if n_scans == 2:
         #     fmri_data = fmri_data[:, :, 0, :]  # get the LR phase encoding scan
@@ -56,7 +57,21 @@ def run(config):
                 else:
                     start_idx += n_trs
                 end_idx = start_idx + n_trs
-                fmri_concat[start_idx:end_idx, :] = fmri_data[:, :, j, i]
+
+                ts = fmri_data[:, :, j, i].copy()
+
+                if nuis_regr:
+                    gs = np.mean(ts, axis=1).reshape(-1, 1)
+                    gs_diff = np.append(0, np.diff(gs, axis=0)).reshape(-1, 1)
+                    nuis = np.concatenate((gs, gs_diff), axis=1)
+                    nuis = np.concatenate((nuis, np.square(nuis)), axis=1)
+
+                    regr = LinearRegression()
+                    regr.fit(nuis, ts)
+                    y_pred = regr.predict(nuis)
+                    ts = ts - y_pred
+
+                fmri_concat[start_idx:end_idx, :] = ts
                 fmri_concat_subjidx[start_idx:end_idx, :] = i
 
         return fmri_concat, fmri_concat_subjidx
