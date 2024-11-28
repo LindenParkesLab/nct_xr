@@ -27,7 +27,7 @@ def run(config):
     file_prefix = config['file_prefix']
     n_clusters = config['n_clusters']
 
-    def get_concat_timeseries(fmri_data, retain_subjects=None, nuis_regr=True):
+    def get_concat_timeseries(fmri_data, retain_subjects=None):
         [n_trs, n_nodes, n_scans, n_subs] = fmri_data.shape
         # if n_scans == 2:
         #     fmri_data = fmri_data[:, :, 0, :]  # get the LR phase encoding scan
@@ -59,18 +59,6 @@ def run(config):
                 end_idx = start_idx + n_trs
 
                 ts = fmri_data[:, :, j, i].copy()
-
-                if nuis_regr:
-                    gs = np.mean(ts, axis=1).reshape(-1, 1)
-                    gs_diff = np.append(0, np.diff(gs, axis=0)).reshape(-1, 1)
-                    nuis = np.concatenate((gs, gs_diff), axis=1)
-                    nuis = np.concatenate((nuis, np.square(nuis)), axis=1)
-
-                    regr = LinearRegression()
-                    regr.fit(nuis, ts)
-                    y_pred = regr.predict(nuis)
-                    ts = ts - y_pred
-
                 fmri_concat[start_idx:end_idx, :] = ts
                 fmri_concat_subjidx[start_idx:end_idx, :] = i
 
