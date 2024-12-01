@@ -94,7 +94,7 @@ def run(config):
     nan_mask = np.sum(np.isnan(fmri_concat), axis=0) > 0
     # extract cluster centers. These represent dominant patterns of recurrent activity over time
     if np.any(nan_mask):
-        print('WARNING: Found NaNs in centroids... masking out of k-means')
+        print('WARNING: Found NaNs in data... masking out of k-means')
         kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit(fmri_concat[:, ~nan_mask])
         centroids = np.zeros((n_clusters, n_nodes))
         centroids[:] = np.nan
