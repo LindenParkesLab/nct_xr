@@ -32,7 +32,8 @@ class NCT(nn.Module):
                  time_horizon, control_set,
                  reference_state, rho, trajectory_constraints,
                  init_weights='one',
-                 eig_weight=0.1, reg_weight=0.0001, reg_type='l2'):
+                 eig_weight=0.1, reg_weight=0.0001, reg_type='l2',
+                 run_null=False):
         super().__init__()
         n_nodes = adjacency_norm.shape[0]
 
@@ -76,6 +77,7 @@ class NCT(nn.Module):
         self.eig_weight = eig_weight
         self.reg_weight = reg_weight
         self.reg_type = reg_type
+        self.run_null = run_null
 
 
     def eigen_value_loss(self, adjacency_sub):
@@ -102,38 +104,50 @@ class NCT(nn.Module):
         _, eig_val_loss = self.eigen_value_loss(adjacency_sub=adjacency_sub)
         reg = self.regularization(adjacency_sub=adjacency_sub, type=self.reg_type, reg_weight=self.reg_weight)
         loss = reg + eig_val_loss
-    
-        # define joint state-costate matrix
-        M = torch.concat((
-            torch.concat((adjacency_sub, torch.matmul(-self.control_set, self.control_set.T) / (2 * self.rho)), dim=1),
-            torch.concat((-2 * self.trajectory_constraints, -adjacency_sub.T), dim=1)
-        ), dim=0)
 
         n_transitions = self.initial_state.shape[1]
-        for transition_idx in np.arange(n_transitions):
-            # define constant vector due to cost deviation from reference state
-            c = torch.concat((torch.zeros((self.n_nodes, 1)).to(device),
-                              2 * torch.matmul(self.trajectory_constraints, self.reference_state[:, transition_idx:transition_idx + 1])), dim=0)
-            c = torch.linalg.solve(M, c)
-    
-            # compute costate initial condition
-            EIp = torch.matrix_exp(M * (self.time_horizon / 2))
-            E = torch.matrix_power(EIp, 2)
-            r = torch.arange(self.n_nodes)
-            E11 = E[r, :][:, r]
-            E12 = E[r, :][:, r + self.n_nodes.detach().cpu().numpy()]
-            l0 = torch.linalg.solve(E12, (
-                        self.target_state[:, transition_idx:transition_idx + 1] - torch.matmul(E11, self.initial_state[:, transition_idx:transition_idx + 1]) - torch.matmul(torch.concat((E11 - self.I, E12), dim=1), c)))
-            z0 = torch.concat((self.initial_state[:, transition_idx:transition_idx + 1], l0), dim=0)
-    
-            # compute intermediate state and error
-            EI = self.I2
-            EI = torch.matmul(EI, EIp)
-            xI = torch.matmul(EI[r, :], z0) + torch.matmul(EI[r, :] - self.IO, c)
-            error = torch.linalg.norm(xI - self.reference_state[:, transition_idx:transition_idx + 1])
-    
-            # Return Loss
-            loss += (error / n_transitions)
+        if self.run_null:
+            # loss = reg + (eig_val_loss * 0.01)
+            for transition_idx in np.arange(n_transitions):
+                resid = torch.matmul(torch.matmul(adjacency_sub, adjacency_sub), self.initial_state[:, transition_idx:transition_idx + 1]) - self.target_state[:, transition_idx:transition_idx + 1]
+                error = torch.sum(torch.pow(resid, 2))
+
+                # loss += ((error * 100) / n_transitions)
+                loss += (error / n_transitions)
+        else:
+            # loss = reg + eig_val_loss
+            
+            # define joint state-costate matrix
+            M = torch.concat((
+                torch.concat((adjacency_sub, torch.matmul(-self.control_set, self.control_set.T) / (2 * self.rho)), dim=1),
+                torch.concat((-2 * self.trajectory_constraints, -adjacency_sub.T), dim=1)
+            ), dim=0)
+
+            for transition_idx in np.arange(n_transitions):
+                # define constant vector due to cost deviation from reference state
+                c = torch.concat((torch.zeros((self.n_nodes, 1)).to(device),
+                                2 * torch.matmul(self.trajectory_constraints, self.reference_state[:, transition_idx:transition_idx + 1])), dim=0)
+                c = torch.linalg.solve(M, c)
+        
+                # compute costate initial condition
+                EIp = torch.matrix_exp(M * (self.time_horizon / 2))
+                E = torch.matrix_power(EIp, 2)
+                r = torch.arange(self.n_nodes)
+                E11 = E[r, :][:, r]
+                E12 = E[r, :][:, r + self.n_nodes.detach().cpu().numpy()]
+                l0 = torch.linalg.solve(E12, (
+                            self.target_state[:, transition_idx:transition_idx + 1] - torch.matmul(E11, self.initial_state[:, transition_idx:transition_idx + 1]) - torch.matmul(torch.concat((E11 - self.I, E12), dim=1), c)))
+                z0 = torch.concat((self.initial_state[:, transition_idx:transition_idx + 1], l0), dim=0)
+        
+                # compute intermediate state and error
+                EI = self.I2
+                EI = torch.matmul(EI, EIp)
+                xI = torch.matmul(EI[r, :], z0) + torch.matmul(EI[r, :] - self.IO, c)
+                error = torch.linalg.norm(xI - self.reference_state[:, transition_idx:transition_idx + 1])
+        
+                loss += (error / n_transitions)
+        
+        # Return Loss
         return loss
    
 
@@ -142,7 +156,7 @@ def train_nct(adjacency_norm, initial_state, target_state,
               reference_state='zero', rho=1, trajectory_constraints='identity',
               init_weights='one',
               n_steps=1000, lr=0.001, eig_weight=0.001, reg_weight=0.001, reg_type='l2',
-              early_stopping=True):
+              early_stopping=True, run_null=False):
     n_nodes = adjacency_norm.shape[0]
 
     if type(reference_state) == str and reference_state == 'zero':
@@ -162,7 +176,8 @@ def train_nct(adjacency_norm, initial_state, target_state,
               time_horizon=time_horizon, control_set=control_set,
               reference_state=reference_state, rho=rho, trajectory_constraints=trajectory_constraints,
               init_weights=init_weights,
-              eig_weight=eig_weight, reg_weight=reg_weight, reg_type=reg_type)
+              eig_weight=eig_weight, reg_weight=reg_weight, reg_type=reg_type,
+              run_null=run_null)
     opt = torch.optim.Adam(nct.parameters(), lr=lr)
     nct.train()
 

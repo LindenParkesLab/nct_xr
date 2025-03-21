@@ -62,8 +62,9 @@ def run(config):
     reg_weight = config['reg_weight']  # regularization strength for weight penalty (e.g., l2)
     reg_type = config['reg_type']  # regularization type: l1 or l2
     early_stopping = config['early_stopping']
-    print('\ttraining params: reference_state = {0}; init_weights = {1}; n_steps = {2}; lr = {3}; eig_weight = {4}; reg_weight = {5}; reg_type = {6}'.format(reference_state, init_weights, n_steps,
-                                                                                                                                                             lr, eig_weight, reg_weight, reg_type))
+    run_null = config['run_null']
+    print('\ttraining params: reference_state = {0}; init_weights = {1}; n_steps = {2}; lr = {3}; eig_weight = {4}; reg_weight = {5}; reg_type = {6}; run_null = {7}'.format(reference_state, init_weights, n_steps,
+                                                                                                                                                                             lr, eig_weight, reg_weight, reg_type, run_null))
 
     # load A matrix
     adjacency = np.load(A_file)
@@ -110,6 +111,8 @@ def run(config):
                                                                                                                                                                c, time_horizon, rho,
                                                                                                                                                                reference_state, init_weights,
                                                                                                                                                                n_steps, lr, eig_weight, reg_weight, reg_type)
+    if run_null:
+        file_str = file_str + '_null'
     print(file_str)
 
     if config['outsubdir'] != '':
@@ -240,7 +243,7 @@ def run(config):
                                                                        time_horizon=time_horizon, control_set=control_set, reference_state=ref_state, 
                                                                        rho=rho, trajectory_constraints=trajectory_constraints, init_weights=init_weights,
                                                                        n_steps=n_steps, lr=lr, eig_weight=eig_weight, reg_weight=reg_weight, reg_type=reg_type,
-                                                                       early_stopping=early_stopping)
+                                                                       early_stopping=early_stopping, run_null=run_null)
                 try:
                     idx = np.where(np.isnan(loss[initial_idx, target_idx]))[0][0] - 1
                 except:
@@ -428,6 +431,7 @@ def get_args():
     parser.add_argument('--reg_weight', type=float, default=0.0001)
     parser.add_argument('--reg_type', type=str, default='l2')
     parser.add_argument('--early_stopping', type=str, default='True')
+    parser.add_argument('--run_null', type=str, default='False')
     
     parser.add_argument('--run_rand_control_set', type=str, default='False')
     parser.add_argument('--run_yeo_control_set', type=str, default='False')
@@ -454,6 +458,11 @@ if __name__ == '__main__':
         args.early_stopping = False
     elif args.early_stopping == 'True':
         args.early_stopping = True
+        
+    if args.run_null == 'False':
+        args.run_null = False
+    elif args.run_null == 'True':
+        args.run_null = True
         
     if args.permute_state == 'False':
         args.permute_state = False
@@ -497,6 +506,7 @@ if __name__ == '__main__':
         'reg_weight': args.reg_weight,
         'reg_type': args.reg_type,
         'early_stopping': args.early_stopping,
+        'run_null': args.run_null,
         
         'run_rand_control_set': args.run_rand_control_set,
         'run_yeo_control_set': args.run_yeo_control_set,
