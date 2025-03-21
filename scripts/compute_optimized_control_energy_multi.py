@@ -32,6 +32,8 @@ def run(config):
     # load rsfMRI clusters
     fmri_clusters = np.load(fmri_clusters_file, allow_pickle=True).item()
     centroids = fmri_clusters['centroids']
+    # state_mask = [0, 2, 4, 5]
+    # centroids = centroids[state_mask, :]
     [n_states, n_nodes] = centroids.shape
     print('\nbrain state params: k = {0}'.format(n_states))
     
@@ -92,10 +94,6 @@ def run(config):
             #         np.random.shuffle(centroid)
             #         states_permuted[i, :, j] = centroid.copy()
 
-    # if 'A0' in file_prefix:
-        # print('Nuking adj weights')
-        # adjacency[:] = 0
-    
     if config['optimal_control']:
         file_prefix += 'optimal-'
     else:
@@ -119,19 +117,16 @@ def run(config):
     if os.path.isfile(os.path.join(outdir, file_str + '.npy')):
         print('Output found. Skipping.')
     else:
+        start = time.time()
         # normalize adjacency matrix
         if adjacency.ndim == 2:
             adjacency_norm = matrix_normalization(adjacency, system=system, c=c)
         elif adjacency.ndim == 3:
             adjacency_norm = matrix_normalization(adjacency[:, :, perm_idx], system=system, c=c)
 
-        # compute control energy
-        start = time.time()
+        # containers
         log_args = dict()
-        loss = np.zeros((n_states, n_states, n_steps))
-        eigen_values = np.zeros((n_states, n_states, n_steps))
-        optimized_weights = np.zeros((n_states, n_states, n_steps, n_nodes))
-        optimized_weights_final = np.zeros((n_states, n_states, n_nodes))
+        optimized_weights_final = np.zeros(n_nodes)
 
         n_timepoints = time_horizon * 1000 + 1
         state_trajectory = np.zeros((n_states, n_states, n_timepoints, n_nodes))
@@ -167,28 +162,36 @@ def run(config):
             xfcorr_partial_variable_decay = np.zeros((n_states, n_states, n_unique_cns, n_samples))
         else:
             print('run_rand_control_set is False')
-            
-        if config['run_yeo_control_set'] is True:
-            print('run_yeo_control_set is True')
-            parc_centroids = pd.read_csv(config['parc_file'], index_col=0)
-            yeo_systems = ['Vis', 'SomMot', 'DorsAttn', 'SalVentAttn', 'Limbic', 'Cont', 'Default']
-            n_systems = len(yeo_systems)
 
-            control_signals_system = np.zeros((n_states, n_states, n_timepoints, n_nodes, n_systems))
-            control_signals_corr_system = np.zeros((n_states, n_states, n_systems))
-            control_energy_system = np.zeros((n_states, n_states, n_systems))
-            numerical_error_system = np.zeros((n_states, n_states, n_systems))
-            xfcorr_system = np.zeros((n_states, n_states, n_systems))
+        ##############################################################################################################################################
+        # train model to get opimtizied decay rates
 
-            control_signals_system_variable_decay = np.zeros((n_states, n_states, n_timepoints, n_nodes, n_systems))
-            control_signals_corr_system_variable_decay = np.zeros((n_states, n_states, n_systems))
-            control_energy_system_variable_decay = np.zeros((n_states, n_states, n_systems))
-            numerical_error_system_variable_decay = np.zeros((n_states, n_states, n_systems))
-            xfcorr_system_variable_decay = np.zeros((n_states, n_states, n_systems))
-        else:
-            print('run_yeo_control_set is False')
-
+        # brain states
+        initial_state = np.zeros((n_nodes, np.power(n_states, 2)))
+        target_state = np.zeros((n_nodes, np.power(n_states, 2)))
+        transition_idx = 0
         for initial_idx in np.arange(n_states):
+            for target_idx in np.arange(n_states):
+                initial_state[:, transition_idx] = normalize_state(centroids[initial_idx, :])
+                target_state[:, transition_idx] = normalize_state(centroids[target_idx, :])
+                transition_idx += 1
+
+        loss, eigen_values, optimized_weights = train_nct(adjacency_norm=adjacency_norm, initial_state=initial_state, target_state=target_state, 
+                                                          time_horizon=time_horizon, control_set=control_set, reference_state=reference_state, 
+                                                          rho=rho, trajectory_constraints=trajectory_constraints, init_weights=init_weights,
+                                                          n_steps=n_steps, lr=lr, eig_weight=eig_weight, reg_weight=reg_weight, reg_type=reg_type,
+                                                          early_stopping=early_stopping)
+        try:
+            idx = np.where(np.isnan(loss))[0][0] - 1
+        except:
+            idx = n_steps - 1
+        optimized_weights_final = optimized_weights[idx, :].copy()
+        adjacency_weights = -1 - optimized_weights_final
+        if np.any(adjacency_weights > 0):
+            print('warning, positive weights found')
+        ##############################################################################################################################################
+
+        for initial_idx in tqdm(np.arange(n_states)):
             if permute_state == 'initial':
                 initial_state = normalize_state(states_permuted[initial_idx, :, perm_idx])  # initial state            
             else:
@@ -199,12 +202,7 @@ def run(config):
                     target_state = normalize_state(states_permuted[target_idx, :, perm_idx])  # target state
                 else:
                     target_state = normalize_state(centroids[target_idx, :])  # target state
-                print('initial_state = {0}, target_state = {1}'.format(initial_idx, target_idx))
-                
-                if permute_state == 'midpoint':
-                    ref_state = normalize_state(states_permuted[initial_idx, target_idx, :, perm_idx])
-                else:
-                    ref_state = reference_state
+                # print('initial_state = {0}, target_state = {1}'.format(initial_idx, target_idx))
                 
                 ##############################################################################################################################################
                 # setup inputs
@@ -214,10 +212,7 @@ def run(config):
                 inputs['target_state'] = target_state.copy()
                 inputs['time_horizon'] = time_horizon
                 inputs['control_set'] = control_set.copy()
-                try:
-                    inputs['reference_state'] = ref_state.copy()
-                except:
-                    inputs['reference_state'] = ref_state
+                inputs['reference_state'] = reference_state
                 inputs['rho'] = rho
                 inputs['trajectory_constraints'] = trajectory_constraints.copy()
                 inputs['system'] = system
@@ -229,26 +224,7 @@ def run(config):
                 ##############################################################################################################################################
 
                 ##############################################################################################################################################
-                # 2) train model to get opimtizied decay rates
-                loss[initial_idx, target_idx], \
-                eigen_values[initial_idx, target_idx], \
-                optimized_weights[initial_idx, target_idx] = train_nct(adjacency_norm=adjacency_norm, initial_state=initial_state, target_state=target_state, 
-                                                                       time_horizon=time_horizon, control_set=control_set, reference_state=ref_state, 
-                                                                       rho=rho, trajectory_constraints=trajectory_constraints, init_weights=init_weights,
-                                                                       n_steps=n_steps, lr=lr, eig_weight=eig_weight, reg_weight=reg_weight, reg_type=reg_type,
-                                                                       early_stopping=early_stopping)
-                try:
-                    idx = np.where(np.isnan(loss[initial_idx, target_idx]))[0][0] - 1
-                except:
-                    idx = n_steps - 1
-                optimized_weights_final[initial_idx, target_idx, :] = optimized_weights[initial_idx, target_idx, idx, :].copy()
-                adjacency_weights = -1 - optimized_weights_final[initial_idx, target_idx, :]
-                if np.any(adjacency_weights > 0):
-                    print('warning, positive weights found')
-                ##############################################################################################################################################
-
-                ##############################################################################################################################################
-                # 3) get the state trajectory and the control signals with VARIABLE optimized self-inhibition weights
+                # 2) get the state trajectory and the control signals with VARIABLE optimized self-inhibition weights
                 adjacency_norm_opt = adjacency_norm.copy()
                 adjacency_norm_opt[np.eye(n_nodes) == 1] = adjacency_weights
                 inputs['adjacency_norm'] = adjacency_norm_opt.copy()
@@ -258,7 +234,7 @@ def run(config):
                 ##############################################################################################################################################
 
                 ##############################################################################################################################################
-                # 4) get the state trajectory and the control signals with STATIC optimized self-inhibition weights
+                # 3) get the state trajectory and the control signals with STATIC optimized self-inhibition weights
                 adjacency_norm_opt = adjacency_norm.copy()
                 adjacency_norm_opt[np.eye(n_nodes) == 1] = np.mean(adjacency_weights)
                 inputs['adjacency_norm'] = adjacency_norm_opt.copy()
@@ -297,41 +273,6 @@ def run(config):
                             control_signals_corr_partial_variable_decay[initial_idx, target_idx, i, j] = np.nanmean(np.abs(np.corrcoef(control_sig.T))[np.triu_indices(n_nodes, k=1)])
                             ##############################################################################################################################################
                             
-                # random partial control sets
-                if config['run_yeo_control_set'] is True:
-                    print('\trunning yeo system partial control sets...')
-
-                    for i in tqdm(np.arange(n_systems)):
-                        control_set_yeo = get_yeo_control_set(list(parc_centroids.index), yeo_systems[i], add_small_control=True)
-                        inputs['control_set'] = control_set_yeo.copy()
-                        n_corr_vars = np.sum(control_set_yeo == 1)
-
-                        ##############################################################################################################################################
-                        inputs['adjacency_norm'] = adjacency_norm.copy()
-                        
-                        state_traj, control_sig, _, control_energy_system[initial_idx, target_idx, i], \
-                            _, numerical_error_system[initial_idx, target_idx, i] = control_energy_helper(inputs=inputs)
-                        
-                        xfcorr_system[initial_idx, target_idx, i] = sp.stats.pearsonr(state_traj[-1, :], target_state)[0]
-                        control_signals_system[initial_idx, target_idx, :, :, i] = control_sig.copy()
-                        control_sig = control_sig[:, np.diag(control_set_yeo == 1)]
-                        control_signals_corr_system[initial_idx, target_idx, i] = np.nanmean(np.abs(np.corrcoef(control_sig.T))[np.triu_indices(n_corr_vars, k=1)])
-                        ##############################################################################################################################################
-
-                        ##############################################################################################################################################
-                        adjacency_norm_opt = adjacency_norm.copy()
-                        adjacency_norm_opt[np.eye(n_nodes) == 1] = adjacency_weights  
-                        inputs['adjacency_norm'] = adjacency_norm_opt.copy()
-                        
-                        state_traj, control_sig, _, control_energy_system_variable_decay[initial_idx, target_idx, i], \
-                            _, numerical_error_system_variable_decay[initial_idx, target_idx, i] = control_energy_helper(inputs=inputs)
-                        
-                        xfcorr_system_variable_decay[initial_idx, target_idx, i] = sp.stats.pearsonr(state_traj[-1, :], target_state)[0]
-                        control_signals_system_variable_decay[initial_idx, target_idx, :, :, i] = control_sig.copy()
-                        control_sig = control_sig[:, np.diag(control_set_yeo == 1)]
-                        control_signals_corr_system_variable_decay[initial_idx, target_idx, i] = np.nanmean(np.abs(np.corrcoef(control_sig.T))[np.triu_indices(n_corr_vars, k=1)])
-                        ##############################################################################################################################################
-
         # save outputs
         if config['compact_save'] is True:
             # log_args['optimized_weights'] = optimized_weights
@@ -368,19 +309,6 @@ def run(config):
                 log_args['control_energy_partial_variable_decay'] = control_energy_partial_variable_decay
                 log_args['numerical_error_partial_variable_decay'] = numerical_error_partial_variable_decay
                 log_args['xfcorr_partial_variable_decay'] = xfcorr_partial_variable_decay
-                
-            if config['run_yeo_control_set'] is True:
-                log_args['control_signals_system'] = control_signals_system
-                log_args['control_signals_corr_system'] = control_signals_corr_system
-                log_args['control_energy_system'] = control_energy_system
-                log_args['numerical_error_system'] = numerical_error_system
-                log_args['xfcorr_system'] = xfcorr_system
-
-                log_args['control_signals_system_variable_decay'] = control_signals_system_variable_decay
-                log_args['control_signals_corr_system_variable_decay'] = control_signals_corr_system_variable_decay
-                log_args['control_energy_system_variable_decay'] = control_energy_system_variable_decay
-                log_args['numerical_error_system_variable_decay'] = numerical_error_system_variable_decay
-                log_args['xfcorr_system_variable_decay'] = xfcorr_system_variable_decay
 
         np.save(os.path.join(outdir, file_str), log_args)
 
@@ -426,8 +354,6 @@ def get_args():
     parser.add_argument('--early_stopping', type=str, default='True')
     
     parser.add_argument('--run_rand_control_set', type=str, default='False')
-    parser.add_argument('--run_yeo_control_set', type=str, default='False')
-    parser.add_argument('--parc_file', type=str, default='/home/lindenmp/research_projects/nct_xr/data/schaefer400-7_centroids.csv')
 
     # save out options
     parser.add_argument('--compact_save', type=str, default='False')
@@ -459,11 +385,6 @@ if __name__ == '__main__':
     elif args.run_rand_control_set == 'True':
         args.run_rand_control_set = True
         
-    if args.run_yeo_control_set == 'False':
-        args.run_yeo_control_set = False
-    elif args.run_yeo_control_set == 'True':
-        args.run_yeo_control_set = True
-
     if args.compact_save == 'False':
         args.compact_save = False
     elif args.compact_save == 'True':
@@ -495,8 +416,6 @@ if __name__ == '__main__':
         'early_stopping': args.early_stopping,
         
         'run_rand_control_set': args.run_rand_control_set,
-        'run_yeo_control_set': args.run_yeo_control_set,
-        'parc_file': args.parc_file,
 
         'compact_save': args.compact_save,
     }
