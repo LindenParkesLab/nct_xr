@@ -30,8 +30,11 @@ def run(config):
     fmri_clusters_file = config['fmri_clusters_file']
 
     # load rsfMRI clusters
-    fmri_clusters = np.load(fmri_clusters_file, allow_pickle=True).item()
-    centroids = fmri_clusters['centroids']
+    try:
+        fmri_clusters = np.load(fmri_clusters_file, allow_pickle=True).item()
+        centroids = fmri_clusters['centroids']
+    except:
+        centroids = np.load(fmri_clusters_file)
     if np.any(np.isnan(centroids)):
         print('WARNING: Found NaNs in centroids... filling within zeros')
         nan_mask = np.isnan(centroids)
@@ -200,12 +203,16 @@ def run(config):
                 initial_state = normalize_state(states_permuted[initial_idx, :, perm_idx])  # initial state            
             else:
                 initial_state = normalize_state(centroids[initial_idx, :])  # initial state
+            if np.all(np.isnan(initial_state)) or np.all(np.isinf(initial_state)):
+                initial_state[:] = 0
             
             for target_idx in np.arange(n_states):
                 if permute_state == 'target':
                     target_state = normalize_state(states_permuted[target_idx, :, perm_idx])  # target state
                 else:
                     target_state = normalize_state(centroids[target_idx, :])  # target state
+                if np.all(np.isnan(target_state)) or np.all(np.isinf(target_state)):
+                    target_state[:] = 0
                 print('initial_state = {0}, target_state = {1}'.format(initial_idx, target_idx))
                 
                 if permute_state == 'midpoint':
