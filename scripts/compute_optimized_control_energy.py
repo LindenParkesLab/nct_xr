@@ -163,8 +163,8 @@ def run(config):
             print('run_rand_control_set is True')
             n_control_nodes = np.linspace(5, n_nodes-5, 50).astype(int)
             n_unique_cns = n_control_nodes.shape[0]
-            n_samples = 50
-            print(n_unique_cns, n_control_nodes)
+            n_samples = 20
+            print(n_unique_cns, n_control_nodes, n_samples)
             
             control_signals_corr_partial = np.zeros((n_states, n_states, n_unique_cns, n_samples))
             control_energy_partial = np.zeros((n_states, n_states, n_unique_cns, n_samples))
