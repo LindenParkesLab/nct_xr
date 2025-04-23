@@ -55,7 +55,7 @@ def get_yeo_control_set(node_labels, system, add_small_control=False):
     return control_set
 
 
-def get_adj_weights(log_args):
+def get_adj_weights(log_args, subtract_one=False):
     n_states = log_args['optimized_weights'].shape[0]
     n_nodes = log_args['optimized_weights'].shape[-1]
 
@@ -66,7 +66,12 @@ def get_adj_weights(log_args):
                 idx = np.where(np.isnan(log_args['loss'][initial_idx, target_idx]))[0][0] - 1
             except:
                 idx = log_args['loss'].shape[-1] - 1
-            optimized_weights = -1 - log_args['optimized_weights'][initial_idx, target_idx, idx]
+            
+            if subtract_one:  
+                optimized_weights = -1 - log_args['optimized_weights'][initial_idx, target_idx, idx]
+            else:
+                optimized_weights = 0 - log_args['optimized_weights'][initial_idx, target_idx, idx]
+
             if np.any(optimized_weights > 0):
                 print('warning, positive weights found')
             adjacency_weights[initial_idx, target_idx] = optimized_weights
