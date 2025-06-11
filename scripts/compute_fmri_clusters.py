@@ -11,8 +11,6 @@ from scipy import stats
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from sklearn.linear_model import LinearRegression
-import matplotlib.pyplot as plt
-from snaplab_tools.plotting.plotting import surface_plot
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 warnings.simplefilter(action='ignore', category=RuntimeWarning)
@@ -26,20 +24,25 @@ def run(config):
     fmri_file = config['fmri_file']
     file_prefix = config['file_prefix']
     n_clusters = config['n_clusters']
+    subject_idx = config['subject_idx']
 
-    def get_concat_timeseries(fmri_data, retain_subjects=None):
+    def get_concat_timeseries(fmri_data, subject_idx=None):
         [n_trs, n_nodes, n_scans, n_subs] = fmri_data.shape
         # if n_scans == 2:
         #     fmri_data = fmri_data[:, :, 0, :]  # get the LR phase encoding scan
         #     fmri_data = fmri_data[:, :, np.newaxis, :]
         # elif n_scans == 4:
         #     fmri_data = fmri_data[:, :, [0, 2], :]  # both scans of LR phase encoding
-        fmri_data = fmri_data[:, :, 0, :]  # get the LR phase encoding scan
-        fmri_data = fmri_data[:, :, np.newaxis, :]
         
-        if retain_subjects is not None:
-            fmri_data = fmri_data[:, :, :, :retain_subjects]
-
+        if subject_idx is None:
+            print('Using all subjects...')
+            fmri_data = fmri_data[:, :, 0, :]  # get the LR phase encoding scan
+            fmri_data = fmri_data[:, :, np.newaxis, :]
+        else:
+            print('Extracting subject {0}...'.format(subject_idx))
+            fmri_data = fmri_data[:, :, :, subject_idx]  # get out single subject data
+            fmri_data = fmri_data[:, :, :, np.newaxis]
+        
         [n_trs, n_nodes, n_scans, n_subs] = fmri_data.shape
         print('n_trs, {0}; n_nodes, {1}; n_scans {2}; n_subs, {3}'.format(n_trs, n_nodes, n_scans, n_subs))
 
@@ -72,7 +75,7 @@ def run(config):
         for i in np.arange(len(fmri_file)):
             print('\t\t...{0}'.format(fmri_file[i]))
             fmri_data = np.load(os.path.join(indir, fmri_file[i]))
-            fmri_concat_scan, fmri_concat_subjidx_scan = get_concat_timeseries(fmri_data=fmri_data)
+            fmri_concat_scan, fmri_concat_subjidx_scan = get_concat_timeseries(fmri_data=fmri_data, subject_idx=subject_idx)
             if i == 0:
                 fmri_concat = np.array([], dtype=np.float64).reshape(0, fmri_concat_scan.shape[1])
                 fmri_concat_subjidx = np.array([], dtype=np.float64).reshape(0, 1)
@@ -81,7 +84,7 @@ def run(config):
     else:
         print('\tfound one fmri file: {0}'.format(fmri_file))
         fmri_data = np.load(os.path.join(indir, fmri_file))
-        fmri_concat, fmri_concat_subjidx = get_concat_timeseries(fmri_data=fmri_data)
+        fmri_concat, fmri_concat_subjidx = get_concat_timeseries(fmri_data=fmri_data, subject_idx=subject_idx)
         
     ####################################################################################################################
 
@@ -158,7 +161,7 @@ def run(config):
     }
     file_str = '{0}fmri_clusters_k-{1}'.format(file_prefix, n_clusters)
     np.save(os.path.join(outdir, file_str), log_args)
-    if n_clusters == 7:
+    if n_clusters == 7 and subject_idx is None:
         np.save(os.path.join(outdir, '{0}fmri_clusters_fmri_concat'.format(file_prefix)), fmri_concat)
         np.save(os.path.join(outdir, '{0}fmri_clusters_fmri_concat_subjidx'.format(file_prefix)), fmri_concat_subjidx)
     ####################################################################################################################
@@ -193,6 +196,7 @@ def get_args():
 
     # settings
     parser.add_argument('--n_clusters', type=int, default=7)
+    parser.add_argument('--subject_idx', type=int, default=None)
 
     args = parser.parse_args()
     args.indir = os.path.expanduser(args.indir)
@@ -212,6 +216,7 @@ if __name__ == '__main__':
 
         # settings
         'n_clusters': args.n_clusters,
+        'subject_idx': args.subject_idx,
     }
 
     run(config=config)
