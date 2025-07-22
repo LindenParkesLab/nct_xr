@@ -13,3 +13,9 @@ In `scripts`:
 In `src`:
 
 - `neural_network.py`: Python code base for our algorithm, implemented in Pytorch
+
+### Data
+
+Note, this repository does not include the processed data used in the above manuscript. These data can be found elsewhere (see Data availability statement in the manuscript) and require further processing before results can be reproduced. 
+
+For the Human Connectome Project data, minimally processed data can be downloaded from https://db.humanconnectome.org. Further processing of these data is required. Scripts to generate structural connectomes can be found in `scripts/processing/hcp_ya`. A list of subjects we used can be found in `scripts/processing/hcp_ya/HCPYA_Schaefer4007_subjids.txt`.
