@@ -9,7 +9,8 @@ In `scripts`:
 - `compute_optimized_control_energy.py`: This Python script takes in a set of brain states and a structural connectome, and runs our optimized NCT model. This script will output a set of optimized self-inhibition parameters, one per state transition.
 - `results_optimized_control_energy.ipynb`: This Python notebook produces panels for Figure 2C and Figure 3.
 - `results_optimized_weights.ipynb`: This Python notebook produces panels for Figure 4 and Figure 5.
-- `results_control_energy_subjects.ipynb`: This Python notebook produces panels for Figure 7.
+- `results_optimized_weights_subjects.ipynb`: This Python notebook produces panels for Figure 7A.
+- `results_control_energy_subjects.ipynb`: This Python notebook produces panels for Figure 7B.
 
 In `src`:
 
