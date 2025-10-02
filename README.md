@@ -1,5 +1,7 @@
 # nct_xr
 
+[![DOI](https://zenodo.org/badge/762404607.svg)](https://doi.org/10.5281/zenodo.17253851)
+
 This repository includes to replicate analyses in: [Kim et al., bioRxiv, 2025](https://www.biorxiv.org/content/10.1101/2025.04.24.650287v1)
 
 In `scripts`:
