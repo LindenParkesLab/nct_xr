@@ -368,7 +368,7 @@ def run(config):
             log_args['control_energy_variable_decay'] = control_energy_variable_decay
 
             log_args['state_trajectory_static_decay'] = state_trajectory_static_decay
-            log_args['control_signals_variable_decay'] = control_signals_static_decay
+            log_args['control_signals_static_decay'] = control_signals_static_decay
             log_args['numerical_error_static_decay'] = numerical_error_static_decay
             log_args['control_energy_static_decay'] = control_energy_static_decay
             
