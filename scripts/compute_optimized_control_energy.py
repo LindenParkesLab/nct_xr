@@ -7,8 +7,8 @@ from tqdm import tqdm
 
 username = getpass.getuser()
 if username == 'lindenmp':
-    sys.path.extend(['/home/lindenmp/research_projects/snaplab_tools'])
-    sys.path.extend(['/home/lindenmp/research_projects/nctpy/src'])
+    sys.path.extend(['/mnt/storage_ssd_raid/research_projects/snaplab_tools'])
+    sys.path.extend(['/mnt/storage_ssd_raid/research_projects/nctpy/src'])
 elif username == 'lp756':
     sys.path.extend(['/home/lp756/projects/f_lp756_1/lindenmp/research_projects/snaplab_tools'])
     sys.path.extend(['/home/lp756/projects/f_lp756_1/lindenmp/research_projects/nctpy/src'])
@@ -79,6 +79,23 @@ def run(config):
     elif adjacency.ndim == 3:
         print('Found {0} connectomes, using connectome {1}'.format(adjacency.shape[-1], perm_idx))
         file_prefix = '{0}-adj-{1}_'.format(file_prefix, perm_idx)
+
+    # -------------------------------------------------------------------------
+    # per-connection mean normalization across subjects (optional)
+    # divides each connection (i,j) by its mean value across subjects,
+    # equalizing absolute SC levels between connections before matrix_normalization.
+    # only valid for 3D adjacency arrays (subject-level connectomes).
+    normalize_connectome = config.get('normalize_connectome', False)
+    if normalize_connectome:
+        if adjacency.ndim == 3:
+            print('Applying per-connection mean normalization across subjects')
+            mean_A = adjacency.mean(axis=2, keepdims=True)        # shape (N, N, 1)
+            mean_A = np.where(mean_A == 0, 1.0, mean_A)           # guard against zero-mean connections
+            adjacency = adjacency / mean_A
+            file_prefix = file_prefix + 'connorm-'
+        else:
+            print('WARNING: normalize_connectome=True but adjacency is 2D; skipping normalization')
+    # -------------------------------------------------------------------------
 
     # permute rsfMRI clusters
     permute_state = config['permute_state']
@@ -444,6 +461,8 @@ def get_args():
     parser.add_argument('--run_yeo_control_set', type=str, default='False')
     parser.add_argument('--parc_file', type=str, default='/home/lindenmp/research_projects/nct_xr/data/schaefer400-7_centroids.csv')
 
+    parser.add_argument('--normalize_connectome', type=str, default='False')
+
     # save out options
     parser.add_argument('--compact_save', type=str, default='False')
 
@@ -489,6 +508,11 @@ if __name__ == '__main__':
     elif args.compact_save == 'True':
         args.compact_save = True
 
+    if args.normalize_connectome == 'False':
+        args.normalize_connectome = False
+    elif args.normalize_connectome == 'True':
+        args.normalize_connectome = True
+
     config = {
         'outdir': args.outdir,
         'outsubdir': args.outsubdir,
@@ -518,6 +542,7 @@ if __name__ == '__main__':
         'run_rand_control_set': args.run_rand_control_set,
         'run_yeo_control_set': args.run_yeo_control_set,
         'parc_file': args.parc_file,
+        'normalize_connectome': args.normalize_connectome,
 
         'compact_save': args.compact_save,
     }
