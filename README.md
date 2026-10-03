@@ -1,5 +1,17 @@
 # nct_xr
 
+> [!IMPORTANT]
+> ## For the decay-rate optimisation algorithm, use [nctpy](https://github.com/LindenParkesLab/nctpy)
+>
+> This repository is kept as it is so that the analyses in the Nature Communications paper can be reproduced.
+>
+> **All future development, questions, and applications of the decay-rate optimiser are now in
+> [nctpy](https://github.com/LindenParkesLab/nctpy)**, as `nctpy.optimize.optimize_decay_rates`. Please go there:
+>
+> - **Install:** `pip install "nctpy[optimize]"`
+> - **Tutorial:** [Optimising decay rates](https://nctpy.readthedocs.io/en/latest/tutorials/decay_rates.html)
+> - **Questions and issues:** [nctpy issues](https://github.com/LindenParkesLab/nctpy/issues)
+
 [![DOI](https://zenodo.org/badge/762404607.svg)](https://doi.org/10.5281/zenodo.17253851)
 
 This repository includes to replicate analyses in: [Kim et al., Nature Communications, 2025](https://doi.org/10.1038/s41467-025-66542-w)
